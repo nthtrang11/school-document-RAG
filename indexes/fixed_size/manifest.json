@@ -1,0 +1,9 @@
+{
+  "strategy": "fixed_size",
+  "fingerprint": "b2848d49f3d5bc331ad505a6333954d983bb3314eb90c21c3aefc87cd0b1e0d7",
+  "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "chunk_size": 900,
+  "chunk_overlap": 120,
+  "chunk_count": 44,
+  "faiss_vectors": 44
+}

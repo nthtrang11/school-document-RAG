@@ -1,0 +1,14 @@
+{
+  "chunk_count": 64,
+  "average_characters": 536.125,
+  "minimum_characters": 120,
+  "maximum_characters": 899,
+  "empty_chunks": 0,
+  "chunks_missing_metadata": 0,
+  "chunks_per_document": {
+    "doc_1eafdae651f9a848": 10,
+    "doc_37ba075bf76a9912": 9,
+    "doc_58c30a9e00ff7193": 5,
+    "doc_1222c0f07b6ebeb9": 40
+  }
+}

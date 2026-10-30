@@ -1,0 +1,16 @@
+question_id,question,question_type,ground_truth_answer,relevant_document_id,relevant_chunk_ids,relevant_page,relevant_section,relevant_chunk_ids_fixed_size,relevant_chunk_ids_recursive,verification_status,source_file_hint
+Q001,"Bảo hiểm y tế năm 2027: văn bản đề cập đến những khóa sinh viên nào?",Keyword Matching,,,,,,,,needs_manual_verification,bao_hiem_y_te.pdf
+Q002,"Thông báo 923/TB-ĐHGTVT ngày 14/10/2026 được nhắc đến ở phần nào của thông báo gia hạn học phí?",Keyword Matching,,,,,,,,needs_manual_verification,dang_ky_bs_15_va_gia_han_hoc_phi.pdf
+Q003,"Thông báo 406/TB-ĐHGTVT được nhắc đến trong thông báo lấy ý kiến phản hồi nào?",Keyword Matching,,,,,,,,needs_manual_verification,danh_gia_giang_vien.pdf
+Q004,"Kế hoạch học kỳ I năm học 2026–2027 dành cho những khóa nào?",Keyword Matching,,,,,,,,needs_manual_verification,ke_hoach_hk1_2026.pdf
+Q005,"Tìm nội dung về lớp học phần có quy mô dưới 15 sinh viên trong thông báo gia hạn học phí.",Keyword Matching,,,,,,,,needs_manual_verification,dang_ky_bs_15_va_gia_han_hoc_phi.pdf
+Q006,"Sinh viên cần lưu ý những gì khi tham gia gia hạn bảo hiểm y tế năm 2027?",Semantic Search,,,,,,,,needs_manual_verification,bao_hiem_y_te.pdf
+Q007,"Những mốc thời gian nào được nêu cho việc đăng ký học và nộp học phí trong học kỳ I năm 2026–2027?",Semantic Search,,,,,,,,needs_manual_verification,ke_hoach_hk1_2026.pdf
+Q008,"Vì sao nhà trường ban hành thông báo lần hai về việc lấy ý kiến hoạt động giảng dạy?",Semantic Search,,,,,,,,needs_manual_verification,danh_gia_giang_vien.pdf
+Q009,"Thông báo gia hạn học phí có thay đổi hạn nộp cho nhóm lớp học phần nào?",Semantic Search,,,,,,,,needs_manual_verification,dang_ky_bs_15_va_gia_han_hoc_phi.pdf
+Q010,"Kế hoạch BHYT giao trách nhiệm triển khai thông tin cho những đơn vị nào?",Semantic Search,,,,,,,,needs_manual_verification,bao_hiem_y_te.pdf
+Q011,"Đối chiếu đối tượng sinh viên và các mốc đăng ký học được nêu trong kế hoạch học kỳ I năm học 2026–2027.",Multi-hop / Synthesis,,,,,,,,needs_manual_verification,ke_hoach_hk1_2026.pdf
+Q012,"Tổng hợp điều kiện của lớp học phần quy mô nhỏ và thời hạn học phí mới được nêu trong thông báo.",Multi-hop / Synthesis,,,,,,,,needs_manual_verification,dang_ky_bs_15_va_gia_han_hoc_phi.pdf
+Q013,"Tóm tắt mục đích của thông báo lấy ý kiến lần hai và hành động người học cần thực hiện.",Multi-hop / Synthesis,,,,,,,,needs_manual_verification,danh_gia_giang_vien.pdf
+Q014,"Tổng hợp nhóm khóa học được đề cập và trách nhiệm các đơn vị trong kế hoạch thu phí BHYT 2027.",Multi-hop / Synthesis,,,,,,,,needs_manual_verification,bao_hiem_y_te.pdf
+Q015,"So sánh nội dung gia hạn học phí với lịch tính và thu học phí trong thông báo học kỳ I.",Multi-hop / Synthesis,,,,,,,,needs_manual_verification,dang_ky_bs_15_va_gia_han_hoc_phi.pdf; ke_hoach_hk1_2026.pdf

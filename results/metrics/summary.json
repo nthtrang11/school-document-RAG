@@ -1,0 +1,6 @@
+{
+  "status": "blocked_needs_manual_ground_truth",
+  "verified_questions": 0,
+  "required_questions": 15,
+  "message": "Không có câu hỏi được xác minh; không tạo metrics thực nghiệm."
+}

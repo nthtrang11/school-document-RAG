@@ -1,0 +1,29 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.pytest_cache/
+.streamlit/secrets.toml
+
+# Source files are supplied locally and may be restricted.
+data/raw/*
+!data/raw/pdf/
+!data/raw/web/
+!data/raw/pdf/.gitkeep
+!data/raw/web/.gitkeep
+
+# Generated corpora and indexes may contain sensitive or restricted content.
+data/processed/*
+!data/processed/.gitkeep
+indexes/*
+!indexes/fixed_size/
+!indexes/recursive/
+!indexes/fixed_size/.gitkeep
+!indexes/recursive/.gitkeep
+results/*
+!results/metrics/
+!results/cases/
+!results/figures/
+!results/metrics/.gitkeep
+!results/cases/.gitkeep
+!results/figures/.gitkeep

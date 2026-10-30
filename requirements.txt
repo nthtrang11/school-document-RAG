@@ -1,0 +1,11 @@
+streamlit[pdf]>=1.57
+pymupdf>=1.24
+pandas>=2.2
+sentence-transformers>=3.0
+faiss-cpu>=1.8
+rank-bm25>=0.2
+pydantic>=2.7
+python-dotenv>=1.0
+markdown-it-py>=3.0
+pytest>=8.0
+matplotlib>=3.8
