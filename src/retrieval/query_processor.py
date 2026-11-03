@@ -21,9 +21,54 @@ _QUERY_EQUIVALENTS = {
     "đóng bảo hiểm y tế": ("nộp phí bảo hiểm y tế", "thu phí BHYT"),
     "mức đóng": ("số tiền đóng", "mức nộp"),
     "mức nộp": ("mức đóng", "số tiền đóng"),
+    "bảo hiểm y tế": ("BHYT",),
     "hoàn thành": ("thực hiện",),
     "kết thúc": ("đến hết ngày",),
 }
+_REGISTRATION_SCHEDULE_EXPANSIONS = (
+    "lịch đăng ký học",
+    "thời gian đăng ký học phần",
+    "đợt đăng ký học phần",
+    "lớp học phần chính khóa",
+    "môn tự chọn",
+    "đăng ký bổ sung học phần",
+    "hủy học phần",
+    "đăng ký học vượt",
+)
+
+
+def is_registration_schedule_query(query: str | None) -> bool:
+    if not query:
+        return False
+    query_text = " ".join(query.casefold().split())
+    asks_registration = any(
+        phrase in query_text for phrase in ("đăng ký", "đăng ky", "registration")
+    )
+    asks_schedule_detail = any(
+        phrase in query_text
+        for phrase in (
+            "lịch",
+            "thời gian",
+            "đợt",
+            "học kỳ",
+            "học phần",
+            "tự chọn",
+            "bổ sung",
+            "theo từng khóa",
+            "theo từng khoá",
+        )
+    )
+    return asks_registration and asks_schedule_detail
+
+
+def is_document_identity_query(query: str | None) -> bool:
+    if not query:
+        return False
+    query_text = " ".join(query.casefold().split())
+    return any(
+        phrase in query_text
+        for phrase in ("văn bản nào", "số hiệu", "ký hiệu văn bản", "ban hành theo")
+    )
 
 
 def _expanded_query(query: str) -> str:
@@ -35,6 +80,8 @@ def _expanded_query(query: str) -> str:
         if phrase in folded
         for equivalent in equivalents
     ]
+    if is_registration_schedule_query(normalized):
+        expansions.extend(_REGISTRATION_SCHEDULE_EXPANSIONS)
     return " ".join(dict.fromkeys([normalized, *expansions]))
 
 

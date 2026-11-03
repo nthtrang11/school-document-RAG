@@ -72,10 +72,10 @@ def chunk_pages(
     chunks: list[ChunkRecord] = []
     for page in pages:
         text = page.text.strip()
-        if not text:
+        if not text and not page.table_rows:
             continue
         section: str | None = None
-        for offset, part in _split_text(text, size, actual_overlap):
+        for offset, part in _split_text(text, size, actual_overlap) if text else []:
             section = section_for(text[: offset + len(part)], section)
             chunks.append(
                 make_chunk(

@@ -27,11 +27,11 @@ def chunk_pages(
     chunks: list[ChunkRecord] = []
     for page in pages:
         text = page.text.strip()
-        if not text:
+        if not text and not page.table_rows:
             continue
         section: str | None = None
         start = 0
-        while start < len(text):
+        while text and start < len(text):
             end = min(start + size, len(text))
             if end < len(text):
                 end = word_aligned_end(text, end)

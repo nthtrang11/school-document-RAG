@@ -39,9 +39,18 @@ def validate_pdf(path: Path, data_root: Path, seen_hashes: set[str]) -> tuple[bo
         _, _, pages = read_pdf(path, data_root)
         if not pages:
             return False, "PDF không có trang"
-        if not any(page.text.strip() for page in pages):
+        if not any(page.text.strip() or page.table_rows for page in pages):
             return False, "Không trích xuất được văn bản; cần OCR trước khi index"
-        combined = "\n".join(page.text for page in pages)
+        combined = "\n".join(
+            "\n".join(
+                [page.text]
+                + [
+                    "\n".join(row.cells)
+                    for row in page.table_rows
+                ]
+            )
+            for page in pages
+        )
         personal_data = personal_data_warning(combined)
         if personal_data:
             return False, f"{personal_data}; cần rà soát trước khi index"

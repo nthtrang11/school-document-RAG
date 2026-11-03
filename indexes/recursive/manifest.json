@@ -1,6 +1,6 @@
 {
   "strategy": "recursive",
-  "fingerprint": "88c75e4bb4a0bde207dcf561e4d5cfb279fb468da87d8621fe0f13e191815d3c",
+  "fingerprint": "2132edbd151ec66167b4810037d15428a9b541e70ce506733535e180660bcc11",
   "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
   "chunk_size": 900,
   "chunk_overlap": 120,

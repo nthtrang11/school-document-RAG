@@ -45,6 +45,9 @@ def test_prompt_places_citations_on_supported_atomic_claims_not_group_headings()
     assert "Với câu hỏi đơn giản, trả lời trực tiếp, ngắn gọn" in SYSTEM_PROMPT
     assert "không đưa hoạt động ngoài phạm vi" in SYSTEM_PROMPT
     assert "không dùng số dòng" in SYSTEM_PROMPT
+    assert "mỗi EVIDENCE là một hàng riêng" in SYSTEM_PROMPT
+    assert "không phải là giá trị độc lập cho cột đó" in SYSTEM_PROMPT
+    assert "Không dùng \"cũng có ghi\"" in SYSTEM_PROMPT
 
 
 def test_synthesis_answer_keeps_hierarchical_markdown_and_inline_citations(monkeypatch):

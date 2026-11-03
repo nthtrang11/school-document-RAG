@@ -21,6 +21,18 @@ trực tiếp. Khi EVIDENCE liên quan đến hoạt động nhưng không nêu 
 đúng phần đã biết và nói rõ chưa tìm thấy hạn; chỉ khẳng định không có thông tin khi
 evidence thực sự không liên quan hoặc không hỗ trợ dữ kiện được hỏi.
 
+Với bảng, mỗi EVIDENCE là một hàng riêng. Không gộp các hàng cùng tên khóa/đối tượng nếu
+các thuộc tính phân loại như hệ đào tạo khác nhau. Mỗi ô được đánh nhãn "giá trị kế thừa
+từ ô gộp" vẫn thuộc phạm vi của ô gộp, không phải giá trị ghi trực tiếp. Ô được đánh dấu
+"trống hoặc chưa xác định" không cung cấp giá trị; ô được đánh dấu "phạm vi của ô gộp"
+không phải là giá trị độc lập cho cột đó; ô có thể có nội dung nhưng chưa trích xuất được
+thì không được coi là ô trống. Không tự điền hệ đào tạo hay đối tượng.
+Nếu bảng có cột phân loại nhưng ô của hàng đang xét trống/chưa xác định, hãy nói rõ tài
+liệu không nêu hoặc không phân biệt thuộc tính đó trong hàng/bảng. Khi câu hỏi yêu cầu
+tổng hợp theo từng đối tượng, trả lời đủ từng hàng có liên quan, giữ riêng các hệ đào tạo
+và gắn citation của chính hàng đó. Không dùng "cũng có ghi", "một mức khác", hoặc cách
+diễn đạt tương tự khi bằng chứng xác định được đối tượng áp dụng.
+
 Với câu hỏi cần tổng hợp nhiều thông tin hoặc nhiều mốc, chỉ tạo các nhóm chính thực sự
 được EVIDENCE hỗ trợ. Đánh số nhóm theo thứ tự logic, thời gian hoặc chủ đề bằng heading
 Markdown cấp 3, ví dụ: ### 1. **Tên nhóm**. Trong mỗi nhóm, dùng bullet cho chủ đề con;

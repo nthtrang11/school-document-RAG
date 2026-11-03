@@ -194,6 +194,39 @@ def test_context_respects_small_token_budget():
     assert evidence == []
 
 
+def test_registration_schedule_keeps_all_table_groups_over_token_budget():
+    chunks = [
+        ChunkRecord(
+            chunk_id=f"schedule-row-{index}",
+            document_id="schedule",
+            text=f"Đợt {index}\nThời gian đăng ký: {index} tháng 8",
+            page=6 + index // 2,
+            end_page=6 + index // 2,
+            strategy="fixed_size",
+            metadata={
+                "table_id": f"schedule:p{6 + index // 2}:t1",
+                "table_group_id": f"schedule:p{6 + index // 2}:t1",
+                "table_headers": ["Đợt", "Thời gian đăng ký"],
+                "table_cells": [f"Đợt {index}", f"{index} tháng 8"],
+                "table_bboxes": [None, None],
+            },
+        )
+        for index in range(4)
+    ]
+    results = [{"chunk": chunk} for chunk in chunks]
+
+    evidence = build_context(
+        results,
+        token_budget=10,
+        query="Lịch đăng ký học kỳ I gồm những đợt nào?",
+    )
+
+    assert [item["chunk_id"] for item in evidence] == [
+        chunk.chunk_id for chunk in chunks
+    ]
+    assert {item["page"] for item in evidence} == {6, 7}
+
+
 def test_table_context_keeps_verbatim_cells_and_page_geometry():
     chunk = ChunkRecord(
         chunk_id="table-row",

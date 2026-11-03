@@ -10,6 +10,7 @@ from src.indexing.bm25_index import tokenize
 from src.retrieval.query_processor import (
     is_monthly_rate_query,
     is_payment_deadline_query,
+    is_registration_schedule_query,
 )
 
 
@@ -91,9 +92,25 @@ def _select_text_segments(text: str, query: str | None) -> list[str]:
 
 
 def _table_columns_for_query(
-    headers: list[str], cells: list[str], query: str | None
+    headers: list[str],
+    cells: list[str],
+    query: str | None,
+    cell_states: list[str] | None = None,
 ) -> list[int]:
-    populated = [index for index, cell in enumerate(cells) if cell.strip()]
+    populated = [
+        index
+        for index, cell in enumerate(cells)
+        if cell.strip()
+        or (
+            cell_states is not None
+            and index < len(cell_states)
+            and cell_states[index] in {
+                "empty_or_unknown",
+                "covered_by_merged_cell",
+                "text_not_extracted",
+            }
+        )
+    ]
     if not query:
         return populated
 
@@ -113,6 +130,17 @@ def _table_columns_for_query(
         )
     ):
         return populated
+
+    amount_query = any(
+        phrase in query_text
+        for phrase in ("mức đóng", "mức tiền", "mức phí", "số tiền", "bao nhiêu tiền")
+    )
+    if amount_query:
+        return [
+            index
+            for index in populated
+            if "thời gian" not in headers[index].casefold()
+        ]
 
     query_terms = set(tokenize(query))
     selected: set[int] = set()
@@ -161,13 +189,25 @@ def _table_columns_for_query(
         for phrase in ("hệ", "kỹ sư", "cử nhân", "kỹ thuật", "công nghệ")
     )
     if mentions_key or mentions_system:
-        for index in populated:
+        for index in range(len(cells)):
             cell_text = " ".join(cells[index].casefold().split())
             if mentions_key and re.search(r"\bkh[oó]a\s+\d+\b", cell_text):
                 selected.add(index)
             if mentions_system and any(
                 phrase in cell_text
                 for phrase in ("hệ ", "kỹ sư", "cử nhân", "kỹ thuật", "công nghệ")
+            ):
+                selected.add(index)
+            if (
+                mentions_system
+                and cell_states is not None
+                and index < len(cell_states)
+                and cell_states[index]
+                in {
+                    "empty_or_unknown",
+                    "covered_by_merged_cell",
+                    "text_not_extracted",
+                }
             ):
                 selected.add(index)
 
@@ -190,6 +230,41 @@ def _table_columns_for_query(
     return [index for index in populated if index in selected]
 
 
+def _table_row_context(
+    headers: list[str],
+    cells: list[str],
+    states: list[str | None] | None,
+    query: str | None,
+) -> tuple[list[int], str, list[str]]:
+    indices = _table_columns_for_query(headers, cells, query, states)
+    selected_headers = [headers[index] for index in indices]
+    selected_cells = [cells[index] for index in indices]
+    selected_states = [
+        states[index] if states is not None and index < len(states) else None
+        for index in indices
+    ]
+    lines = []
+    for header, cell, state in zip(
+        selected_headers, selected_cells, selected_states
+    ):
+        line = f"{header}: {cell}"
+        if state == "inherited_from_merged_cell":
+            line += " (giá trị kế thừa từ ô gộp; không phải giá trị ghi trực tiếp)"
+        elif not cell and state == "empty_or_unknown":
+            line += " [ô trống hoặc chưa xác định trong bảng]"
+        elif not cell and state == "covered_by_merged_cell":
+            line += " [phạm vi của ô gộp; không phải ô giá trị độc lập]"
+        elif not cell and state == "text_not_extracted":
+            line += " [có thể có nội dung nhưng chưa trích xuất được]"
+        if cell or state in {
+            "empty_or_unknown",
+            "covered_by_merged_cell",
+            "text_not_extracted",
+        }:
+            lines.append(line)
+    return indices, "\n".join(lines), [cell for cell in selected_cells if cell]
+
+
 def build_context(
     results: list[dict[str, Any]],
     token_budget: int | None = None,
@@ -198,12 +273,58 @@ def build_context(
     budget = token_budget or settings.token_budget
     used = 0
     evidence: list[dict[str, Any]] = []
-    payment_deadline_query = is_payment_deadline_query(query)
+    table_group_costs: dict[tuple[str, str], int] = {}
+    table_group_seen: dict[tuple[str, str], set[str]] = {}
     for item in results:
         chunk = item["chunk"]
+        table_id = chunk.metadata.get("table_id")
+        if not table_id:
+            continue
+        group_id = chunk.metadata.get("table_group_id") or table_id
+        group_key = (chunk.document_id, str(group_id))
+        if chunk.chunk_id in table_group_seen.setdefault(group_key, set()):
+            continue
+        table_group_seen[group_key].add(chunk.chunk_id)
+        headers = chunk.metadata.get("table_headers") or []
+        cells = chunk.metadata.get("table_cells")
+        states = chunk.metadata.get("table_cell_states")
+        if (
+            isinstance(headers, list)
+            and isinstance(cells, list)
+            and len(headers) == len(cells)
+        ):
+            _, row_text, _ = _table_row_context(
+                headers,
+                cells,
+                states if isinstance(states, list) else None,
+                query,
+            )
+        else:
+            row_text = chunk.search_text or chunk.text
+        title = str(chunk.metadata.get("table_title") or "")
+        table_group_costs[group_key] = table_group_costs.get(group_key, 0) + max(
+            1,
+            (len(row_text) + len(title) + 32 + 3) // 4,
+        )
+    table_group_admitted: dict[tuple[str, str], bool] = {}
+    payment_deadline_query = is_payment_deadline_query(query)
+    registration_schedule_query = is_registration_schedule_query(query)
+    for item in results:
+        chunk = item["chunk"]
+        table_id = chunk.metadata.get("table_id")
+        table_group = (
+            (
+                chunk.document_id,
+                str(chunk.metadata.get("table_group_id") or table_id),
+            )
+            if table_id
+            else None
+        )
         table_headers = chunk.metadata.get("table_headers")
         table_cells = chunk.metadata.get("table_cells")
         table_bboxes = chunk.metadata.get("table_bboxes")
+        table_cell_states = chunk.metadata.get("table_cell_states")
+        table_cell_spans = chunk.metadata.get("table_cell_spans")
         is_card_duration_table = isinstance(table_headers, list) and any(
             "thời gian sử dụng thẻ" in str(header).casefold()
             for header in table_headers
@@ -221,33 +342,59 @@ def build_context(
             and isinstance(table_cells, list)
             and len(table_headers) == len(table_cells)
         ):
-            table_indices = _table_columns_for_query(
-                table_headers, table_cells, query
+            table_indices, text, evidence_segments = _table_row_context(
+                table_headers,
+                table_cells,
+                table_cell_states if isinstance(table_cell_states, list) else None,
+                query,
             )
             selected_headers = [table_headers[index] for index in table_indices]
             selected_cells = [table_cells[index] for index in table_indices]
+            selected_states = [
+                table_cell_states[index]
+                if isinstance(table_cell_states, list)
+                and index < len(table_cell_states)
+                else None
+                for index in table_indices
+            ]
+            selected_spans = [
+                table_cell_spans[index]
+                if isinstance(table_cell_spans, list)
+                and index < len(table_cell_spans)
+                else None
+                for index in table_indices
+            ]
             selected_bboxes = [
                 table_bboxes[index]
                 if isinstance(table_bboxes, list) and index < len(table_bboxes)
                 else None
                 for index in table_indices
             ]
-            text = "\n".join(
-                f"{header}: {cell}"
-                for header, cell in zip(selected_headers, selected_cells)
-                if cell
-            )
-            evidence_segments = [cell for cell in selected_cells if cell]
+            if chunk.metadata.get("table_title"):
+                text = f"Tiêu đề bảng: {chunk.metadata['table_title']}\n{text}"
         else:
             evidence_segments = _select_text_segments(chunk.text, query)
             text = "\n".join(evidence_segments)
             selected_headers = table_headers
             selected_cells = table_cells
+            selected_states = table_cell_states
+            selected_spans = table_cell_spans
             selected_bboxes = table_bboxes
         if not text.strip():
             continue
         estimated_tokens = max(1, len(text) // 4)
-        if used + estimated_tokens > budget:
+        if table_group:
+            if table_group not in table_group_admitted:
+                table_group_admitted[table_group] = (
+                    used + table_group_costs.get(table_group, estimated_tokens)
+                    <= budget
+                    or registration_schedule_query
+                )
+                if table_group_admitted[table_group]:
+                    used += table_group_costs.get(table_group, estimated_tokens)
+            if not table_group_admitted[table_group]:
+                continue
+        elif used + estimated_tokens > budget:
             continue
         evidence.append(
             {
@@ -275,11 +422,28 @@ def build_context(
                 "table_headers": selected_headers,
                 "table_cells": selected_cells,
                 "table_bboxes": selected_bboxes,
+                "table_cell_states": selected_states,
+                "table_cell_spans": selected_spans,
+                "table_title": chunk.metadata.get("table_title"),
+                "table_id": chunk.metadata.get("table_id"),
+                "table_group_id": chunk.metadata.get("table_group_id"),
+                "table_row_index": chunk.metadata.get("table_row_index"),
+                "table_bbox": chunk.metadata.get("table_bbox"),
+                "table_header_rows": chunk.metadata.get("table_header_rows"),
+                "table_header_spans": chunk.metadata.get("table_header_spans"),
                 "table_locations": (
                     [
-                        {"text": cell, "bbox": bbox}
-                        for cell, bbox in zip(
-                            selected_cells, selected_bboxes or []
+                        {
+                            "text": cell,
+                            "bbox": bbox,
+                            **({"state": state} if state is not None else {}),
+                            **({"span": span} if span is not None else {}),
+                        }
+                        for cell, bbox, state, span in zip(
+                            selected_cells,
+                            selected_bboxes or [],
+                            selected_states or [None] * len(selected_cells or []),
+                            selected_spans or [None] * len(selected_cells or []),
                         )
                         if cell
                     ]
@@ -289,5 +453,6 @@ def build_context(
                 "estimated_tokens": estimated_tokens,
             }
         )
-        used += estimated_tokens
+        if not table_group:
+            used += estimated_tokens
     return evidence

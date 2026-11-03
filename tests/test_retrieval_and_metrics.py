@@ -36,6 +36,114 @@ def test_bhyt_payment_deadline_queries_expand_to_document_wording():
     assert not is_monthly_rate_query("Thời hạn sử dụng thẻ BHYT là bao lâu?")
 
 
+def test_registration_schedule_queries_expand_to_related_schedule_terms():
+    from src.retrieval.query_processor import is_registration_schedule_query
+
+    queries = (
+        "Lịch đăng ký học kỳ I năm học 2026–2027?",
+        "Các đợt đăng ký học phần gồm những đợt nào?",
+        "Khi nào được đăng ký học phần tự chọn?",
+        "Có lịch đăng ký bổ sung không?",
+    )
+    for query in queries:
+        processed = process_query(query)
+        assert is_registration_schedule_query(query)
+        assert query in processed["bm25_query"]
+        assert "thời gian đăng ký học phần" in processed["bm25_query"]
+        assert "đăng ký bổ sung học phần" in processed["bm25_query"]
+
+
+def test_registration_schedule_retrieval_keeps_all_matching_year_groups(monkeypatch):
+    from src.indexing.bm25_index import BM25Index
+    from src.indexing.index_manager import IndexBundle
+    from src.models import ChunkRecord
+    from src.retrieval.hybrid_retriever import HybridRetriever
+
+    chunks = []
+    rows = (
+        ("doc-2026", "2026-2027", "chính quy", 6),
+        ("doc-2026", "2026-2027", "tiên tiến", 7),
+        ("doc-2025", "2025-2026", "chính quy", 6),
+        ("doc-fees", "2027", "BHYT", 1),
+    )
+    for index, (document_id, year, audience, page) in enumerate(rows):
+        table_id = f"{document_id}:p{page}:t1"
+        chunks.append(
+            ChunkRecord(
+                chunk_id=f"schedule-{year}-{audience}",
+                document_id=document_id,
+                text=f"Lớp {audience}\nTừ 10/8 đến 30/8",
+                page=page,
+                end_page=page,
+                strategy="fixed_size",
+                search_text=(
+                    f"Tiêu đề: Lịch đăng ký học kỳ I năm học {year} {audience}\n"
+                    "Lớp học: Đợt học 26\nThời gian đăng ký: Từ 10/8 đến 30/8"
+                ),
+                metadata={
+                    "table_id": table_id,
+                    "table_group_id": table_id,
+                    "table_row_index": 1,
+                    "table_title": (
+                        f"Lịch đăng ký học kỳ I năm học {year} {audience}"
+                        if audience != "BHYT"
+                        else None
+                    ),
+                    "table_headers": (
+                        ["Lớp học", "Thời gian đăng ký"]
+                        if audience != "BHYT"
+                        else [
+                            "Đối tượng",
+                            "Số tiền đóng BHYT",
+                            "Thời gian sử dụng thẻ",
+                        ]
+                    ),
+                    "table_cells": (
+                        [f"Lớp {audience}", "Từ 10/8 đến 30/8"]
+                        if audience != "BHYT"
+                        else ["Khóa 64", "455.400", "08 tháng"]
+                    ),
+                },
+            )
+        )
+
+    class StaticFaiss:
+        def search(self, query_vector, top_k):
+            return [(index, float(len(chunks) - index)) for index in range(len(chunks))]
+
+    class StaticEmbedder:
+        def __init__(self, model_name):
+            pass
+
+        def encode(self, texts):
+            return [[0.0] for _ in texts]
+
+    monkeypatch.setattr(
+        "src.retrieval.hybrid_retriever.SentenceTransformerEmbedder",
+        StaticEmbedder,
+    )
+    retriever = HybridRetriever(
+        IndexBundle(
+            strategy="fixed_size",
+            chunks=chunks,
+            bm25=BM25Index(chunks),
+            faiss=StaticFaiss(),
+            model_name="test-model",
+        )
+    )
+
+    results = retriever.search(
+        "Lịch đăng ký học kỳ I năm học 2026–2027?", top_k=1
+    )["results"]
+
+    assert {
+        item["chunk"].metadata["table_title"] for item in results
+    } == {
+        "Lịch đăng ký học kỳ I năm học 2026-2027 chính quy",
+        "Lịch đăng ký học kỳ I năm học 2026-2027 tiên tiến",
+    }
+
+
 def test_rrf_fuses_by_chunk_id_and_ignores_raw_scores():
     fused = reciprocal_rank_fusion(
         [[("a", 900.0), ("b", 1.0)], [("b", 0.1), ("a", 0.0)]], k=60
@@ -225,6 +333,82 @@ def test_table_title_retrieval_expands_only_rows_from_the_same_table(monkeypatch
         )
     }
     assert "bhyt-row-1" in bm25_ids
+
+
+def test_table_row_expansion_includes_continuation_pages(monkeypatch):
+    from src.chunking.fixed_size import chunk_pages
+    from src.indexing.bm25_index import BM25Index
+    from src.indexing.index_manager import IndexBundle
+    from src.ingestion.pdf_loader import _link_continued_tables
+    from src.models import PageRecord, TableRowRecord
+    from src.retrieval.hybrid_retriever import HybridRetriever
+
+    pages = _link_continued_tables(
+        [
+            PageRecord(
+                document_id="multi-page-doc",
+                page_no=1,
+                text="",
+                table_rows=[
+                    TableRowRecord(
+                        table_id="multi-page-doc:p1:t1",
+                        row_index=1,
+                        headers=["Đối tượng", "Mức đóng"],
+                        header_rows=[["Đối tượng", "Mức đóng"]],
+                        cells=["Nhóm A", "100"],
+                        bboxes=[None, None],
+                    )
+                ],
+            ),
+            PageRecord(
+                document_id="multi-page-doc",
+                page_no=2,
+                text="",
+                table_rows=[
+                    TableRowRecord(
+                        table_id="multi-page-doc:p2:t1",
+                        row_index=1,
+                        headers=["Đối tượng", "Mức đóng"],
+                        header_rows=[["Đối tượng", "Mức đóng"]],
+                        cells=["Nhóm B", "200"],
+                        bboxes=[None, None],
+                    )
+                ],
+            ),
+        ]
+    )
+    chunks = chunk_pages(pages)
+
+    class StaticFaiss:
+        def search(self, query_vector, top_k):
+            return [(index, float(len(chunks) - index)) for index in range(len(chunks))]
+
+    class StaticEmbedder:
+        def __init__(self, model_name):
+            pass
+
+        def encode(self, texts):
+            return [[0.0]]
+
+    monkeypatch.setattr(
+        "src.retrieval.hybrid_retriever.SentenceTransformerEmbedder",
+        StaticEmbedder,
+    )
+    bundle = IndexBundle(
+        strategy="fixed_size",
+        chunks=chunks,
+        bm25=BM25Index(chunks),
+        faiss=StaticFaiss(),
+        model_name="test-model",
+    )
+
+    results = HybridRetriever(bundle).search("Mức đóng", top_k=1)["results"]
+
+    assert [item["chunk"].page for item in results] == [1, 2]
+    assert [item["chunk"].metadata["table_cells"][0] for item in results] == [
+        "Nhóm A",
+        "Nhóm B",
+    ]
 
 
 def test_fused_text_match_precedes_broad_table_fallback(monkeypatch):

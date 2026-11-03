@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter
 from datetime import date
 from typing import Any
@@ -13,8 +14,10 @@ from src.indexing.bm25_index import BM25Index, tokenize
 from src.indexing.index_manager import IndexBundle
 from src.models import SearchFilter
 from src.retrieval.query_processor import (
+    is_document_identity_query,
     is_monthly_rate_query,
     is_payment_deadline_query,
+    is_registration_schedule_query,
     process_query,
 )
 from src.retrieval.rrf import reciprocal_rank_fusion
@@ -71,6 +74,29 @@ def _matches_query(chunk: Any, query: str) -> bool:
             for cell in cells
         )
     return True
+
+
+def _asks_for_table_values(query: str) -> bool:
+    query_text = " ".join(query.casefold().split())
+    return bool(
+        is_registration_schedule_query(query)
+        or
+        re.search(r"\bkh[oó]a\s+\d+\b", query_text)
+        or any(
+            phrase in query_text
+            for phrase in (
+                "mỗi khóa",
+                "mỗi khoá",
+                "theo từng",
+                "từng khóa",
+                "từng khoá",
+                "mức đóng",
+                "mức tiền",
+                "mức phí",
+                "hệ đào tạo",
+            )
+        )
+    )
 
 
 class HybridRetriever:
@@ -148,7 +174,8 @@ class HybridRetriever:
             table_id = chunk.metadata.get("table_id")
             if not table_id:
                 continue
-            table_key = (chunk.document_id, str(table_id))
+            table_group_id = chunk.metadata.get("table_group_id") or table_id
+            table_key = (chunk.document_id, str(table_group_id))
             self._table_groups.setdefault(table_key, []).append(chunk.chunk_id)
             self._table_group_by_chunk[chunk.chunk_id] = table_key
 
@@ -197,6 +224,7 @@ class HybridRetriever:
             for chunk_id in sorted(
                 self._table_groups[group],
                 key=lambda value: (
+                    self._by_id[value].page,
                     self._by_id[value].metadata.get("table_row_index", 0),
                     value,
                 ),
@@ -308,7 +336,7 @@ class HybridRetriever:
             and chunk_id in allowed_chunk_ids
         ]
         table_search_results = self._table_search_bm25.search(
-            query, len(self._table_chunk_indexes)
+            bm25_query, len(self._table_chunk_indexes)
         )
         table_search_ids = [
             self.bundle.chunks[self._table_chunk_indexes[index]].chunk_id
@@ -324,7 +352,164 @@ class HybridRetriever:
         ordered_ids = [
             chunk.chunk_id for chunk in self.bundle.chunks if chunk.chunk_id in exact_ids
         ]
-        ordered_ids.extend(table_phrase_ids)
+        schedule_group_keys: set[tuple[str, str]] = set()
+        if _asks_for_table_values(query):
+            table_candidates = list(
+                dict.fromkeys([*table_search_ids, *table_phrase_ids])
+            )
+            if table_candidates:
+                mentioned_keys = re.findall(
+                    r"\bkh[oó]a\s+(\d+)\b", query.casefold()
+                )
+                group_key_scores: dict[tuple[str, str], int] = Counter()
+                query_terms = set(tokenize(bm25_query))
+                group_header_scores: dict[tuple[str, str], int] = {}
+                group_header_terms: dict[tuple[str, str], set[str]] = {}
+                group_term_scores: dict[tuple[str, str], int] = {}
+                group_title_scores: dict[tuple[str, str], int] = {}
+                for group_key, chunk_ids in self._table_groups.items():
+                    exact_keys = {
+                        key
+                        for chunk_id in chunk_ids
+                        for cell in (
+                            self._by_id[chunk_id].metadata.get("table_cells") or []
+                        )
+                        if isinstance(cell, str)
+                        for key in mentioned_keys
+                        if re.match(
+                            rf"\bkh[oó]a\s+{re.escape(key)}\b",
+                            cell.casefold(),
+                        )
+                    }
+                    group_key_scores[group_key] = len(exact_keys)
+                    group_headers = {
+                        token
+                        for chunk_id in chunk_ids
+                        for token in tokenize(
+                            " ".join(
+                                str(value)
+                                for value in (
+                                    self._by_id[chunk_id].metadata.get("table_headers")
+                                    or []
+                                )
+                            )
+                        )
+                    }
+                    group_header_terms[group_key] = group_headers
+                    group_header_scores[group_key] = len(
+                        query_terms.intersection(group_headers)
+                    )
+                    group_titles = {
+                        token
+                        for chunk_id in chunk_ids
+                        for token in tokenize(
+                            str(self._by_id[chunk_id].metadata.get("table_title") or "")
+                        )
+                    }
+                    group_title_scores[group_key] = len(
+                        query_terms.intersection(group_titles)
+                    )
+                    group_terms = {
+                        token
+                        for chunk_id in chunk_ids
+                        for token in tokenize(
+                            " ".join(
+                                value
+                                for value in (
+                                    str(self._by_id[chunk_id].metadata.get("title_subject") or ""),
+                                    str(self._by_id[chunk_id].metadata.get("table_title") or ""),
+                                    self._by_id[chunk_id].search_text
+                                    or self._by_id[chunk_id].text,
+                                    " ".join(
+                                        str(value)
+                                        for value in (
+                                            self._by_id[chunk_id].metadata.get("table_headers")
+                                            or []
+                                        )
+                                    ),
+                                    " ".join(
+                                        str(value)
+                                        for value in (
+                                            self._by_id[chunk_id].metadata.get("table_cells")
+                                            or []
+                                        )
+                                    ),
+                                )
+                                if value
+                            )
+                        )
+                    }
+                    group_term_scores[group_key] = len(
+                        query_terms.intersection(group_terms)
+                    )
+                candidate_groups = {
+                    self._table_group_by_chunk[chunk_id]
+                    for chunk_id in table_candidates
+                    if chunk_id in self._table_group_by_chunk
+                }
+                preferred_group = max(
+                    candidate_groups,
+                    key=lambda group: (
+                        group_key_scores.get(group, 0),
+                        group_header_scores.get(group, 0),
+                        group_term_scores.get(group, 0),
+                        -next(
+                            (
+                                rank
+                                for rank, chunk_id in enumerate(
+                                    table_candidates, start=1
+                                )
+                                if self._table_group_by_chunk.get(chunk_id) == group
+                            ),
+                            len(table_candidates) + 1,
+                        ),
+                        group,
+                    ),
+                )
+                if is_registration_schedule_query(query):
+                    mentioned_years = set(re.findall(r"\b(?:19|20)\d{2}\b", query))
+                    for group in candidate_groups:
+                        if group[0] != preferred_group[0]:
+                            continue
+                        group_text = " ".join(
+                            " ".join(
+                                str(value)
+                                for value in (
+                                    self._by_id[chunk_id].metadata.get("title_subject"),
+                                    self._by_id[chunk_id].metadata.get("table_title"),
+                                )
+                                if value
+                            )
+                            for chunk_id in self._table_groups[group]
+                        )
+                        group_years = set(
+                            re.findall(r"\b(?:19|20)\d{2}\b", group_text)
+                        )
+                        header_terms = group_header_terms.get(group, set())
+                        has_registration_time_headers = (
+                            {"đăng", "ký"}.issubset(header_terms)
+                            and bool({"thời", "gian"}.intersection(header_terms))
+                        )
+                        if (
+                            has_registration_time_headers
+                            or group_title_scores.get(group, 0) >= 2
+                        ) and (
+                            not mentioned_years
+                            or mentioned_years.issubset(group_years)
+                        ):
+                            schedule_group_keys.add(group)
+                    if not schedule_group_keys:
+                        schedule_group_keys.add(preferred_group)
+                else:
+                    schedule_group_keys.add(preferred_group)
+                ordered_ids.extend(
+                    chunk_id
+                    for chunk_id in table_candidates
+                    if self._table_group_by_chunk.get(chunk_id) in schedule_group_keys
+                    and chunk_id not in ordered_ids
+                )
+        elif not is_document_identity_query(query):
+            ordered_ids.extend(table_phrase_ids)
         ordered_ids.extend(
             chunk_id
             for chunk_id, _ in fused
@@ -339,6 +524,20 @@ class HybridRetriever:
         selected_ids = ordered_ids[:limit]
         neighbor_ids = self._neighbor_text_chunk_ids(selected_ids, filters)
         expanded_ids = self._related_table_chunk_ids(selected_ids)
+        if schedule_group_keys:
+            expanded_ids.extend(
+                chunk_id
+                for group in sorted(schedule_group_keys)
+                for chunk_id in sorted(
+                    self._table_groups[group],
+                    key=lambda value: (
+                        self._by_id[value].page,
+                        self._by_id[value].metadata.get("table_row_index", 0),
+                        value,
+                    ),
+                )
+                if chunk_id not in expanded_ids
+            )
         result_ids = list(
             dict.fromkeys([*selected_ids, *neighbor_ids, *expanded_ids])
         )

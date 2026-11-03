@@ -85,3 +85,67 @@ def test_both_strategies_keep_table_rows_verbatim_and_index_column_labels():
             (10.0, 10.0, 20.0, 20.0),
             (20.0, 10.0, 30.0, 20.0),
         ]
+
+
+def test_both_strategies_index_tables_on_pages_without_text():
+    page = PageRecord(
+        document_id="doc-image-table",
+        page_no=3,
+        text="",
+        table_rows=[
+            TableRowRecord(
+                table_id="doc-image-table:p3:t1",
+                row_index=1,
+                headers=["Đối tượng", "Mức đóng"],
+                cells=["Nhóm A", "100"],
+                bboxes=[None, None],
+            )
+        ],
+    )
+
+    for chunks in (
+        fixed_chunks([page]),
+        recursive_chunks([page]),
+    ):
+        table_chunks = [
+            chunk for chunk in chunks if chunk.metadata.get("table_id")
+        ]
+        assert len(table_chunks) == 1
+        assert table_chunks[0].page == 3
+        assert table_chunks[0].text == "Nhóm A\n100"
+
+
+def test_both_strategies_preserve_multilevel_table_headers():
+    page = PageRecord(
+        document_id="doc-multi-header",
+        page_no=1,
+        text="",
+        table_rows=[
+            TableRowRecord(
+                table_id="doc-multi-header:p1:t1",
+                row_index=2,
+                headers=["Đối tượng", "Mức đóng"],
+                header_rows=[
+                    ["Thông tin người học", "Khoản phải nộp"],
+                    ["Khóa đào tạo", "Bảo hiểm y tế"],
+                ],
+                cells=["Khóa 64", "683.100"],
+                bboxes=[None, None],
+                cell_states=["explicit_value", "explicit_value"],
+            )
+        ],
+    )
+
+    for chunks in (
+        fixed_chunks([page]),
+        recursive_chunks([page]),
+    ):
+        row = next(chunk for chunk in chunks if chunk.metadata.get("table_id"))
+        assert row.metadata["table_headers"] == [
+            "Thông tin người học > Khóa đào tạo",
+            "Khoản phải nộp > Bảo hiểm y tế",
+        ]
+        assert row.metadata["table_header_rows"] == [
+            ["Thông tin người học", "Khoản phải nộp"],
+            ["Khóa đào tạo", "Bảo hiểm y tế"],
+        ]

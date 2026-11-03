@@ -73,7 +73,8 @@ Với endpoint Gemini OpenAI-compatible, ứng dụng tự đặt `reasoning_eff
 - Nút `Xem nguồn` hoặc citation mở đúng PDF/trang trong cùng phiên ứng dụng; mapping riêng theo citation được đăng ký trong Session State trước khi hiển thị, không bị ghi đè khi mở nhiều nguồn.
 - Nút quay lại nằm dưới thông báo trạng thái bằng chứng. Nút Back của trình duyệt hoặc chuột dùng cùng một mục history tạm; nút trong ứng dụng cũng tiêu thụ mục này để không làm Back tiếp theo bị dừng ở trang nguồn.
 - PDF chỉ được highlight khi toàn bộ evidence hiển thị khớp trên đúng trang. Bảng dùng bbox gắn với từng ô liên quan của đúng hàng và chỉ đánh dấu nếu text trong mọi bbox khớp; đoạn văn dùng so khớp chính xác từng đoạn evidence, chuẩn hóa Unicode/khoảng trắng. Nếu chỉ khớp một phần hoặc không xác minh được vị trí, trang vẫn mở nhưng không đánh dấu.
-- Ingestion trích bảng thành các hàng có header, nội dung từng ô và bbox. Header chỉ hỗ trợ tìm kiếm/context; citation vẫn dùng nội dung ô gốc, cùng mapping hàng/cột và tọa độ dùng để highlight.
+- Ingestion trích bảng thành các hàng có header, nội dung từng ô, trạng thái ô, nguồn ô, span và bbox. Header gộp nhiều cột được giữ cùng phạm vi; nếu nhãn cột con không có trong PDF, context ghi rõ chưa xác định thay vì đặt tên suy đoán. Ô kế thừa từ rowspan được giữ nguồn gốc, còn ô bị colspan che phủ không được coi là giá trị riêng. Các bảng tiếp trang chỉ được liên kết khi header khớp và caption không mâu thuẫn. Citation vẫn dùng đúng hàng/cột gốc và tọa độ dùng để highlight.
+- BM25, FAISS và RRF chia sẻ chunk ID; truy vấn tổng hợp giá trị ưu tiên bảng có header phù hợp rồi mở rộng toàn bộ hàng cùng nhóm trước khi dựng context, để Top-K không loại mất biến thể/ngoại lệ của bảng.
 - Câu hỏi đã tra cứu được khôi phục khi quay lại từ tài liệu nguồn. Ô câu hỏi chỉ tự bỏ focus khi nhấn Enter; thao tác gửi bằng nút không bị đổi.
 - Chunk được cắt ở ranh giới từ để citation không bắt đầu/kết thúc giữa một từ. Nội dung liên hệ được giữ nguyên trong evidence/index để citation khớp nguồn; chuỗi có thể là số định danh vẫn bị từ chối trong bước kiểm tra ingestion.
 - PDF gốc không bị sửa. PDF scan, OCR lỗi hoặc nội dung đã biến đổi có thể không hỗ trợ tìm văn bản để highlight.
@@ -88,7 +89,7 @@ Với endpoint Gemini OpenAI-compatible, ứng dụng tự đặt `reasoning_eff
    python -m src.ingestion.ingestion_pipeline
    ```
 
-   Kết quả gồm `pages_raw.jsonl`, `pages_clean.jsonl`, `documents.jsonl`, danh sách hợp lệ/bị loại và `ingestion_summary.json` trong `data/processed/`. PDF có text-layer được đọc theo thứ tự tọa độ trang; bảng được lưu thêm theo hàng/cột cùng bbox. Nếu số hiệu hoặc ngày ở header vẫn thiếu/không đầy đủ, pipeline chỉ OCR vùng header trang đầu và lưu nguồn/trang bằng chứng. Tài liệu scan không có text-layer vẫn cần OCR toàn văn riêng trước khi index.
+   Kết quả gồm `pages_raw.jsonl`, `pages_clean.jsonl`, `documents.jsonl`, danh sách hợp lệ/bị loại và `ingestion_summary.json` trong `data/processed/`. PDF có text-layer được đọc theo thứ tự tọa độ trang; bảng được lưu theo hàng/cột với header, trạng thái ô, span và bbox. Header hiện trích từ hàng header do PyMuPDF nhận diện; nhãn con không có trong nguồn được đánh dấu chưa xác định, không suy diễn. Nếu số hiệu hoặc ngày ở header vẫn thiếu/không đầy đủ, pipeline chỉ OCR vùng header trang đầu và lưu nguồn/trang bằng chứng. Tài liệu scan không có text-layer vẫn cần OCR toàn văn riêng trước khi index.
 
 3. Tạo hai index độc lập:
 

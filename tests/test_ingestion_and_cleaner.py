@@ -45,6 +45,42 @@ def test_read_pdf_uses_original_one_based_pages(tmp_path: Path):
     assert [page.page_no for page in pages] == [1, 2]
 
 
+def test_table_parts_on_adjacent_pages_share_group_only_when_headers_match():
+    from src.ingestion.pdf_loader import _link_continued_tables
+    from src.models import TableRowRecord
+
+    def page(page_no, table_id, headers, cells):
+        return PageRecord(
+            document_id="doc-multipage",
+            page_no=page_no,
+            text="",
+            table_rows=[
+                TableRowRecord(
+                    table_id=table_id,
+                    row_index=1,
+                    headers=headers,
+                    header_rows=[headers],
+                    cells=cells,
+                    bboxes=[None, None],
+                )
+            ],
+        )
+
+    pages = _link_continued_tables(
+        [
+            page(1, "doc-multipage:p1:t1", ["Đối tượng", "Mức"], ["Nhóm A", "100"]),
+            page(2, "doc-multipage:p2:t1", ["Đối tượng", "Mức"], ["Nhóm B", "200"]),
+            page(3, "doc-multipage:p3:t1", ["Khóa", "Thời hạn"], ["Khóa C", "1 năm"]),
+        ]
+    )
+
+    assert pages[0].table_rows[0].table_id != pages[1].table_rows[0].table_id
+    assert pages[0].table_rows[0].table_group_id == (
+        pages[1].table_rows[0].table_group_id
+    )
+    assert pages[2].table_rows[0].table_group_id is None
+
+
 def test_real_faculty_feedback_notice_extracts_activity_deadline_and_issue_date():
     source_dir = Path(__file__).parents[1] / "data" / "raw"
     source = source_dir / "danh_gia_giang_vien.pdf"
@@ -87,6 +123,25 @@ def test_real_project_table_extraction_keeps_complete_row_cells_and_bboxes():
     )
 
 
+def test_real_schedule_table_titles_keep_distinct_audiences_separate():
+    source_dir = Path(__file__).parents[1] / "data" / "raw"
+    source = source_dir / "ke_hoach_hk1_2026.pdf"
+    if not source.is_file():
+        pytest.skip("Project source PDF is unavailable")
+
+    _, _, pages = read_pdf(source, source_dir)
+    regular_rows = pages[5].table_rows
+    advanced_rows = pages[6].table_rows
+
+    assert len(regular_rows) == 6
+    assert len(advanced_rows) == 6
+    assert "LỊCH ĐĂNG KÝ HỌC" in regular_rows[0].table_title
+    assert "CÁC LỚP CHƯƠNG TRÌNH TIÊN TIẾN" in advanced_rows[0].table_title
+    assert {
+        row.table_group_id for row in regular_rows
+    }.isdisjoint({row.table_group_id for row in advanced_rows})
+
+
 def test_real_bhyt_table_repeats_merged_cells_on_each_applicable_row():
     source_dir = Path(__file__).parents[1] / "data" / "raw"
     source = source_dir / "bao_hiem_y_te.pdf"
@@ -95,6 +150,9 @@ def test_real_bhyt_table_repeats_merged_cells_on_each_applicable_row():
 
     _, _, pages = read_pdf(source, source_dir)
     rows = pages[0].table_rows
+    assert all(row.table_title is None for row in rows)
+    assert rows[0].header_cell_spans[0].column_end == 2
+    assert rows[0].header_cell_spans[1] == rows[0].header_cell_spans[0]
     keyed_rows = {
         (row.cells[0], row.cells[1]): row
         for row in rows
@@ -104,9 +162,19 @@ def test_real_bhyt_table_repeats_merged_cells_on_each_applicable_row():
         "683.100",
         "12 tháng (Từ 01/01/2027 đến\n31/12/2027)",
     ]
+    assert keyed_rows[("Khóa 66", "")].cell_states == [
+        "explicit_value",
+        "covered_by_merged_cell",
+        "explicit_value",
+        "explicit_value",
+    ]
     assert keyed_rows[("Khóa 65", "")].cells[2:] == [
         "683.100",
         "12 tháng (Từ 01/01/2027 đến\n31/12/2027)",
+    ]
+    assert keyed_rows[("Khóa 65", "")].cell_states[2:] == [
+        "inherited_from_merged_cell",
+        "inherited_from_merged_cell",
     ]
     assert keyed_rows[("Khoá 64", "Hệ kỹ sư")].cells[2:] == [
         "683.100",
@@ -116,6 +184,9 @@ def test_real_bhyt_table_repeats_merged_cells_on_each_applicable_row():
         "455.400",
         "08 tháng (Từ 01/01/2027 đến\n31/08/2027)",
     ]
+    assert keyed_rows[("Khoá 64", "Hệ cử nhân")].cell_states[0] == (
+        "inherited_from_merged_cell"
+    )
     assert keyed_rows[("Khóa 63", "Hệ kỹ sư")].cells[2:] == [
         "455.400",
         "08 tháng (Từ 01/01/2027 đến\n31/08/2027)",
@@ -125,6 +196,9 @@ def test_real_bhyt_table_repeats_merged_cells_on_each_applicable_row():
         for row in rows
         for column in (2, 3)
     )
+    assert keyed_rows[("Khóa 65", "")].cell_spans[2].row_start == 1
+    assert keyed_rows[("Khóa 65", "")].cell_spans[2].row_end == 3
+    assert keyed_rows[("Khóa 66", "")].cell_spans[1].column_end == 2
     assert keyed_rows[("Khóa 66", "")].table_id == keyed_rows[
         ("Khóa 65", "")
     ].table_id
@@ -136,6 +210,151 @@ def test_real_bhyt_table_repeats_merged_cells_on_each_applicable_row():
     assert "56,925 đồng/tháng/SV" in pages[0].text
     assert "không nộp phí BHYT tại trường" in pages[1].text
     assert "hoàn thành trước ngày 15/11/2026" in pages[1].text
+
+
+def test_both_chunk_strategies_keep_all_bhyt_table_rows_and_cell_provenance(
+    monkeypatch,
+):
+    from src.chunking.fixed_size import chunk_pages as fixed_chunks
+    from src.chunking.recursive import chunk_pages as recursive_chunks
+    from src.indexing.bm25_index import BM25Index
+    from src.indexing.index_manager import IndexBundle
+    from src.models import ChunkRecord
+    from src.rag.context_builder import build_context
+    from src.retrieval.hybrid_retriever import HybridRetriever
+
+    source_dir = Path(__file__).parents[1] / "data" / "raw"
+    source = source_dir / "bao_hiem_y_te.pdf"
+    if not source.is_file():
+        pytest.skip("Project source PDF is unavailable")
+
+    _, _, pages = read_pdf(source, source_dir)
+    questions = [
+        "Mức đóng bảo hiểm y tế là bao nhiêu tiền cho mỗi khóa?",
+        "Khóa 64 hệ kỹ sư đóng bao nhiêu tiền?",
+        "Khóa 64 hệ cử nhân đóng bao nhiêu tiền?",
+        "Khóa 63 đóng bao nhiêu tiền?",
+        "Khóa 65 và Khóa 66 có phân biệt hệ đào tạo trong bảng không?",
+        "Những khóa nào có nhiều mức đóng khác nhau?",
+        "Vì sao Khóa 64 có hai mức đóng khác nhau?",
+    ]
+
+    for chunker in (fixed_chunks, recursive_chunks):
+        chunks = chunker(pages)
+        table_chunks = [chunk for chunk in chunks if chunk.metadata.get("table_id")]
+        assert len(table_chunks) == 5
+        assert len({chunk.metadata["table_id"] for chunk in table_chunks}) == 1
+        fee_table_id = table_chunks[0].metadata["table_id"]
+        chunks.append(
+            ChunkRecord(
+                chunk_id=f"unrelated-schedule-{table_chunks[0].strategy}",
+                document_id="unrelated-schedule",
+                text=(
+                    "Sinh viên các khóa 63, 64, 65, 66 đăng ký học; "
+                    "nộp số mức học phần theo hệ đào tạo."
+                ),
+                page=2,
+                end_page=2,
+                strategy=table_chunks[0].strategy,
+                search_text=(
+                    "Đối tượng: Sinh viên các khóa 63, 64, 65, 66; "
+                    "Hệ đào tạo: hệ chính quy; nộp số mức học phần"
+                ),
+                metadata={
+                    "table_id": "unrelated-schedule:p2:t1",
+                    "table_row_index": 1,
+                    "table_headers": ["Đối tượng", "Hệ đào tạo"],
+                    "table_cells": [
+                        "Sinh viên các khóa 63, 64, 65, 66",
+                        "hệ chính quy",
+                    ],
+                    "table_bboxes": [None, None],
+                },
+            )
+        )
+        class StaticFaiss:
+            def search(self, vector, top_k):
+                return [
+                    (index, float(len(chunks) - index))
+                    for index in range(len(chunks))
+                ]
+
+        class StaticEmbedder:
+            def __init__(self, model_name):
+                pass
+
+            def encode(self, texts):
+                return [[0.0] for _ in texts]
+
+        monkeypatch.setattr(
+            "src.retrieval.hybrid_retriever.SentenceTransformerEmbedder",
+            StaticEmbedder,
+        )
+        retriever = HybridRetriever(
+            IndexBundle(
+                strategy=table_chunks[0].strategy,
+                chunks=chunks,
+                bm25=BM25Index(chunks),
+                faiss=StaticFaiss(),
+                model_name="test-model",
+            )
+        )
+        for question in questions:
+            result = retriever.search(question, top_k=1)
+            retrieved_table_rows = [
+                item for item in result["results"]
+                if item["chunk"].metadata.get("table_id")
+            ]
+            assert len(retrieved_table_rows) == 5
+            assert {
+                item["chunk"].metadata["table_id"]
+                for item in retrieved_table_rows
+            } == {fee_table_id}
+            evidence = build_context(result["results"], query=question)
+            assert len(evidence) == 5
+            assert len({item["chunk_id"] for item in evidence}) == 5
+            assert all(item["page"] == 1 for item in evidence)
+        engineering_row = next(
+            chunk for chunk in table_chunks
+            if chunk.metadata["table_cells"][1] == "Hệ kỹ sư"
+        )
+        assert engineering_row.metadata["table_headers"][1] == (
+            "Đối tượng > [nhãn cột chưa xác định]"
+        )
+
+        assert "683.100" in "\n".join(
+            item["text"] for item in build_context(
+                retriever.search(questions[5], top_k=1)["results"],
+                query=questions[5],
+            )
+        )
+        amount_summary_context = build_context(
+            retriever.search(questions[6], top_k=1)["results"],
+            query=questions[6],
+        )
+        amount_summary_text = "\n".join(
+            item["text"] for item in amount_summary_context
+        )
+        assert "Hệ kỹ sư" in amount_summary_text
+        assert "Hệ cử nhân" in amount_summary_text
+
+        per_row = {
+            tuple(chunk.metadata["table_cells"]): chunk
+            for chunk in table_chunks
+        }
+        no_system_row = next(
+            chunk for chunk in table_chunks
+            if chunk.metadata["table_cells"][0] == "Khóa 66"
+        )
+        no_system_evidence = build_context(
+            [{"chunk": no_system_row}],
+            query="Khóa 66 có phân biệt hệ đào tạo không?",
+        )[0]
+        assert "phạm vi của ô gộp" in no_system_evidence["text"]
+        assert "Khóa 66" in no_system_evidence["text"]
+        assert "683.100" in no_system_evidence["text"]
+        assert "Hệ đào tạo" not in no_system_evidence["text"]
+        assert len(per_row) == 5
 
 
 def test_validator_accepts_text_pdf_and_rejects_duplicate_hash(tmp_path: Path):
@@ -168,6 +387,39 @@ def test_validator_rejects_pdf_without_extractable_text(tmp_path: Path):
     valid, reason = validate_pdf(path, tmp_path, set())
     assert not valid
     assert reason == "Không trích xuất được văn bản; cần OCR trước khi index"
+
+
+def test_validator_accepts_structured_table_without_page_text(tmp_path, monkeypatch):
+    import pymupdf
+    import src.ingestion.validator as validator
+    from src.models import PageRecord, TableRowRecord
+
+    path = tmp_path / "table-only.pdf"
+    document = pymupdf.open()
+    document.new_page()
+    document.save(path)
+    document.close()
+    page = PageRecord(
+        document_id="doc-table-only",
+        page_no=1,
+        text="",
+        table_rows=[
+            TableRowRecord(
+                table_id="doc-table-only:p1:t1",
+                row_index=1,
+                headers=["Đối tượng", "Mức"],
+                cells=["Nhóm A", "100"],
+                bboxes=[None, None],
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        validator,
+        "read_pdf",
+        lambda source, root: ("doc-table-only", "a" * 64, [page]),
+    )
+
+    assert validator.validate_pdf(path, tmp_path, set()) == (True, None)
 
 
 def test_empty_or_malformed_pdf_is_rejected(tmp_path: Path):

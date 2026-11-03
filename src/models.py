@@ -47,15 +47,52 @@ class DocumentMetadata(BaseModel):
 
 class TableRowRecord(BaseModel):
     table_id: str
+    table_group_id: str | None = None
     row_index: int = Field(ge=1)
     headers: list[str]
     cells: list[str]
     bboxes: list[tuple[float, float, float, float] | None]
+    table_title: str | None = None
+    header_rows: list[list[str]] = Field(default_factory=list)
+    header_cell_spans: list["TableCellSpan | None"] = Field(default_factory=list)
+    cell_states: list[
+        Literal[
+            "explicit_value",
+            "inherited_from_merged_cell",
+            "covered_by_merged_cell",
+            "empty_or_unknown",
+            "text_not_extracted",
+        ]
+    ] = Field(default_factory=list)
+    cell_origins: list[tuple[int, int] | None] = Field(default_factory=list)
+    cell_spans: list["TableCellSpan | None"] = Field(default_factory=list)
+    table_bbox: tuple[float, float, float, float] | None = None
 
     @model_validator(mode="after")
     def validate_columns(self) -> "TableRowRecord":
         if not (len(self.headers) == len(self.cells) == len(self.bboxes)):
             raise ValueError("Table headers, cells, and bboxes must have matching lengths")
+        for values in (
+            self.header_cell_spans,
+            self.cell_states,
+            self.cell_origins,
+            self.cell_spans,
+        ):
+            if values and len(values) != len(self.cells):
+                raise ValueError("Table cell metadata must match the column count")
+        return self
+
+
+class TableCellSpan(BaseModel):
+    row_start: int = Field(ge=0)
+    row_end: int = Field(ge=1)
+    column_start: int = Field(ge=0)
+    column_end: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> "TableCellSpan":
+        if self.row_end <= self.row_start or self.column_end <= self.column_start:
+            raise ValueError("Table cell spans must have positive dimensions")
         return self
 
 

@@ -1,5 +1,181 @@
 {
   "case_id": "case_3",
-  "status": "not_run",
-  "reason": "Chưa có đủ câu hỏi/ground truth đã xác minh để lập case thực nghiệm."
+  "status": "retrieval_verified_answer_generation_not_run",
+  "source": {
+    "filename": "ke_hoach_hk1_2026.pdf",
+    "document_id": "doc_1222c0f07b6ebeb9",
+    "pages": 7,
+    "document_number": "574/TB-ĐHGTVT",
+    "issue_date": "2026-07-24"
+  },
+  "root_cause": [
+    "BM25, FAISS và RRF truy xuất được các hàng lịch, nhưng context builder ước tính nhóm bảng cần 3233 token, vượt ngân sách 3000 token và loại toàn bộ nhóm.",
+    "Phụ đề đối tượng trên trang 7 không được trích xuất; hai bảng trang 6 và 7 bị liên kết nhầm chỉ vì tiêu đề cột giống nhau."
+  ],
+  "changes_verified": [
+    "Tiêu đề viết hoa gần bảng được lưu thành tiêu đề bảng; phụ đề đối tượng khác nhau giữ bảng trang 6 và trang 7 ở hai nhóm riêng.",
+    "Truy xuất lịch giữ các nhóm bảng phù hợp trong tài liệu nguồn được chọn và mở rộng từng nhóm thành toàn bộ hàng.",
+    "Context lịch giữ mọi hàng phù hợp kể cả khi tổng nhóm vượt ngân sách token thông thường."
+  ],
+  "before": {
+    "bm25_faiss_rrf": "Cả ba nhánh đều trả về bằng chứng lịch phù hợp ở trang 6-7.",
+    "context": "Câu hỏi lịch tổng quát nhận 0 hàng bằng chứng; chi phí nhóm bảng ước tính 3233 token so với ngân sách 3000."
+  },
+  "after": {
+    "fixed_size_chunks": 61,
+    "recursive_chunks": 79,
+    "table_rows": 12,
+    "table_groups": {
+      "page_6": 6,
+      "page_7": 6
+    },
+    "questions": [
+      {
+        "question": "Lịch đăng ký học kỳ I năm học 2026–2027?",
+        "answer_from_pdf": "Có 12 hàng lịch: chương trình chính quy ở trang 6 và chương trình tiên tiến/chất lượng cao ở trang 7.",
+        "fixed_size": {
+          "bm25_top1": "trang 6, hàng bảng 1",
+          "faiss_top1": "văn bản trang 6",
+          "rrf_top1": "trang 6, hàng bảng 1",
+          "context_table_rows": 12,
+          "context_pages": [6, 7]
+        },
+        "recursive": {
+          "bm25_top1": "trang 6, hàng bảng 1",
+          "faiss_top1": "văn bản trang 6",
+          "rrf_top1": "trang 6, hàng bảng 1",
+          "context_table_rows": 12,
+          "context_pages": [6, 7]
+        }
+      },
+      {
+        "question": "Thời gian đăng ký học kỳ I năm học 2026–2027?",
+        "answer_from_pdf": "Context giữ đủ các hàng đăng ký, bổ sung và ngoại lệ của cả hai bảng lịch.",
+        "fixed_size": {
+          "bm25_top1": "trang 6, hàng bảng 1",
+          "faiss_top1": "văn bản trang 6",
+          "rrf_top1": "văn bản trang 6",
+          "context_table_rows": 12,
+          "context_pages": [6, 7]
+        },
+        "recursive": {
+          "bm25_top1": "trang 6, hàng bảng 1",
+          "faiss_top1": "văn bản trang 6",
+          "rrf_top1": "văn bản trang 6",
+          "context_table_rows": 12,
+          "context_pages": [6, 7]
+        }
+      },
+      {
+        "question": "Các đợt đăng ký học phần trong học kỳ I gồm những đợt nào?",
+        "answer_from_pdf": "Context giữ đủ 12 hàng và phân biệt đăng ký học thực tế với đợt đăng ký nhu cầu.",
+        "fixed_size": {
+          "bm25_top1": "trang 6, hàng bảng 1",
+          "faiss_top1": "trang 6, hàng bảng 1",
+          "rrf_top1": "trang 6, hàng bảng 1",
+          "context_table_rows": 12,
+          "context_pages": [6, 7]
+        },
+        "recursive": {
+          "bm25_top1": "văn bản trang 2",
+          "faiss_top1": "trang 6, hàng bảng 1",
+          "rrf_top1": "trang 6, hàng bảng 1",
+          "context_table_rows": 12,
+          "context_pages": [6, 7]
+        }
+      },
+      {
+        "question": "Lịch đăng ký học theo từng khóa như thế nào?",
+        "answer_from_pdf": "Context giữ đủ các hàng lớp học, điều kiện, thời gian và nhóm đối tượng ở trang 6-7.",
+        "fixed_size": {
+          "bm25_top1": "trang 6, hàng bảng 1",
+          "faiss_top1": "văn bản trang 6",
+          "rrf_top1": "văn bản trang 6",
+          "context_table_rows": 12,
+          "context_pages": [6, 7]
+        },
+        "recursive": {
+          "bm25_top1": "trang 6, hàng bảng 1",
+          "faiss_top1": "văn bản trang 6",
+          "rrf_top1": "văn bản trang 6",
+          "context_table_rows": 12,
+          "context_pages": [6, 7]
+        }
+      },
+      {
+        "question": "Khi nào sinh viên được đăng ký học phần tự chọn?",
+        "answer_from_pdf": "Hàng học phần chính khóa ghi K63-K66 đăng ký từ 25/7–29/7/2026, gồm môn tự chọn được mở và môn bắt buộc; thông tin có ở cả hai nhóm đối tượng.",
+        "fixed_size": {
+          "bm25_top1": "trang 6, hàng bảng 1",
+          "faiss_top1": "văn bản trang 6",
+          "rrf_top1": "văn bản trang 6",
+          "context_table_rows": 12,
+          "context_pages": [6, 7]
+        },
+        "recursive": {
+          "bm25_top1": "trang 6, hàng bảng 1",
+          "faiss_top1": "văn bản trang 6",
+          "rrf_top1": "văn bản trang 6",
+          "context_table_rows": 12,
+          "context_pages": [6, 7]
+        }
+      },
+      {
+        "question": "Có lịch đăng ký bổ sung không?",
+        "answer_from_pdf": "Có. Thời gian tùy lớp và đối tượng: 10/8–18/8, 10/8–15/8, 21/9–25/9 và 5/10–6/10; mốc cuối là hạn bổ sung/hủy của đợt học 3.",
+        "fixed_size": {
+          "bm25_top1": "trang 6, hàng bảng 1",
+          "faiss_top1": "văn bản trang 6",
+          "rrf_top1": "văn bản trang 6",
+          "context_table_rows": 12,
+          "context_pages": [6, 7]
+        },
+        "recursive": {
+          "bm25_top1": "trang 6, hàng bảng 1",
+          "faiss_top1": "văn bản trang 7",
+          "rrf_top1": "văn bản trang 6",
+          "context_table_rows": 12,
+          "context_pages": [6, 7]
+        }
+      },
+      {
+        "question": "Kế hoạch học kỳ I năm học 2026–2027 được ban hành theo văn bản nào?",
+        "answer_from_pdf": "Thông báo số 574/TB-ĐHGTVT ngày 24/7/2026, ở trang 1.",
+        "fixed_size": {
+          "bm25_top1": "văn bản trang 1",
+          "faiss_top1": "trang 7, hàng bảng 2",
+          "rrf_top1": "văn bản trang 1",
+          "context_includes_page_1": true
+        },
+        "recursive": {
+          "bm25_top1": "văn bản trang 1",
+          "faiss_top1": "trang 7, hàng bảng 2",
+          "rrf_top1": "văn bản trang 1",
+          "context_includes_page_1": true
+        }
+      }
+    ],
+    "metadata_filter_check": {
+      "filters": {
+        "document_type": "Thông báo",
+        "issuing_authority": "Trường Đại học GTVT",
+        "issue_date_from": "2026-07-01",
+        "issue_date_to": "2026-07-31"
+      },
+      "fixed_size": {
+        "bm25": 8,
+        "faiss": 8,
+        "rrf": 13,
+        "context_table_rows": 12
+      },
+      "recursive": {
+        "bm25": 8,
+        "faiss": 8,
+        "rrf": 12,
+        "context_table_rows": 12
+      }
+    },
+    "answer_generation": "Không gọi LLM trực tiếp; các tóm tắt câu trả lời ở trên được đối chiếu thủ công với nội dung PDF đã trích xuất và context.",
+    "citation_validation": "Các test highlight hàng bảng trên PDF thật đã đạt; cả 12 hàng truy xuất giữ số trang và hình học ô gốc."
+  }
 }

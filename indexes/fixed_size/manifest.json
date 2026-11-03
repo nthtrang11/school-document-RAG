@@ -1,6 +1,6 @@
 {
   "strategy": "fixed_size",
-  "fingerprint": "9920a0d84c0ad617536189c63f17a73fe789903ea59a3d17472f5e7a0a25f174",
+  "fingerprint": "83ba9a4f81a388d20dd337abf6e924f9fe5c1bb5490c9e3421b80521c5e9af50",
   "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
   "chunk_size": 900,
   "chunk_overlap": 120,
