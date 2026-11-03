@@ -6,16 +6,21 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from src.config import settings
 from src.ingestion.cleaner import clean_pages
-from src.ingestion.metadata_extractor import extract_metadata
+from src.ingestion.metadata_extractor import (
+    extract_metadata,
+    extract_pdf_metadata,
+    needs_header_ocr,
+)
 from src.ingestion.pdf_loader import read_pdf
 from src.ingestion.validator import validate_pdf
 from src.ingestion.web_loader import load_web_file
 from src.ingestion.validator import personal_data_warning
-from src.models import PageRecord
+from src.models import DocumentMetadata, PageRecord
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 LOGGER = logging.getLogger(__name__)
@@ -28,9 +33,53 @@ def _write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
             file.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
 
+def _load_existing_metadata(path: Path) -> dict[str, DocumentMetadata]:
+    if not path.exists():
+        return {}
+    metadata: dict[str, DocumentMetadata] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            item = DocumentMetadata.model_validate_json(line)
+            metadata[item.document_id] = item
+    return metadata
+
+
+def _preserve_existing_metadata(
+    current: DocumentMetadata,
+    previous_by_id: dict[str, DocumentMetadata],
+) -> DocumentMetadata:
+    previous = previous_by_id.get(current.document_id)
+    if previous is None or previous.file_hash != current.file_hash:
+        return current
+    updates: dict[str, Any] = {}
+    groups = (
+        ("number_symbol", "number_symbol_raw", "number_symbol_source", "number_symbol_page"),
+        ("issue_date", "issue_date_raw", "issue_year", "issue_date_source", "issue_date_page"),
+    )
+    for fields in groups:
+        value_field = fields[0]
+        current_value = getattr(current, value_field)
+        previous_value = getattr(previous, value_field)
+        if previous_value is None:
+            continue
+        current_source = getattr(current, fields[-2])
+        if current_value is None or current_source == "ocr":
+            updates.update(
+                {
+                    field: getattr(previous, field)
+                    for field in fields
+                    if getattr(previous, field) is not None
+                }
+            )
+    if updates and previous.metadata_verification_status == "verified":
+        updates["metadata_verification_status"] = "verified"
+    return current.model_copy(update=updates)
+
+
 def run_ingestion(pdf_dir: Path | None = None) -> dict[str, int]:
     source_dir = pdf_dir or settings.pdf_dir
     output_dir = settings.processed_dir
+    previous_metadata = _load_existing_metadata(output_dir / "documents.jsonl")
     files = sorted(source_dir.rglob("*.pdf")) if source_dir.exists() else []
     seen_hashes: set[str] = set()
     accepted: list[dict[str, Any]] = []
@@ -48,7 +97,16 @@ def run_ingestion(pdf_dir: Path | None = None) -> dict[str, int]:
         try:
             document_id, file_hash, pages = read_pdf(path, data_root)
             before, after = clean_pages(pages)
-            metadata = extract_metadata(path, data_root, document_id, file_hash, pages)
+            ocr_needed = needs_header_ocr(pages)
+            ocr_started = perf_counter()
+            metadata = extract_pdf_metadata(path, data_root, document_id, file_hash, pages)
+            if ocr_needed:
+                LOGGER.info(
+                    "OCR vùng header %s: %.3f giây",
+                    path.name,
+                    perf_counter() - ocr_started,
+                )
+            metadata = _preserve_existing_metadata(metadata, previous_metadata)
             accepted.append(
                 {"document_id": document_id, "path": str(path), "sha256": file_hash}
             )
@@ -86,6 +144,7 @@ def run_ingestion(pdf_dir: Path | None = None) -> dict[str, int]:
                 metadata = extract_metadata(
                     path, web_data_root, document_id, file_hash, before, source_url=source_url
                 )
+                metadata = _preserve_existing_metadata(metadata, previous_metadata)
                 accepted.append(
                     {"document_id": document_id, "path": str(path), "sha256": file_hash}
                 )

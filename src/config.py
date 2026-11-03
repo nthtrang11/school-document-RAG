@@ -59,9 +59,16 @@ class Settings(BaseModel):
             for item in os.getenv("EXCLUDED_DOCUMENTS", "").split(",")
             if item.strip()
         )
-        llm_endpoint = os.getenv(
-            "LLM_ENDPOINT", "https://api.openai.com/v1/chat/completions"
-        )
+        llm_provider = os.getenv("LLM_PROVIDER", "openai_compatible").strip()
+        llm_endpoint = os.getenv("LLM_ENDPOINT")
+        if not llm_endpoint:
+            llm_base_url = os.getenv("LLM_BASE_URL")
+            if llm_base_url:
+                llm_endpoint = f"{llm_base_url.rstrip('/')}/chat/completions"
+            elif llm_provider.casefold() == "groq":
+                llm_endpoint = "https://api.groq.com/openai/v1/chat/completions"
+            else:
+                llm_endpoint = "https://api.openai.com/v1/chat/completions"
         reasoning_effort = os.getenv("LLM_REASONING_EFFORT")
         if reasoning_effort is None and urlsplit(llm_endpoint).hostname == (
             "generativelanguage.googleapis.com"
@@ -90,7 +97,7 @@ class Settings(BaseModel):
             rrf_k=int(os.getenv("RRF_K", "60")),
             final_top_k=int(os.getenv("FINAL_TOP_K", "5")),
             token_budget=int(os.getenv("TOKEN_BUDGET", "3000")),
-            llm_provider=os.getenv("LLM_PROVIDER", "openai_compatible"),
+            llm_provider=llm_provider,
             llm_api_key=os.getenv("LLM_API_KEY"),
             llm_model=os.getenv("LLM_MODEL"),
             llm_endpoint=llm_endpoint,

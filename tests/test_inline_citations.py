@@ -37,6 +37,42 @@ def test_inline_citations_keep_position_and_map_each_answer_source():
     assert linked["E2"]["page"] == 7
 
 
+def test_extended_citation_format_renders_as_interactive_citation_from_mapping():
+    rendered, linked = build_inline_answer_html(
+        "Thông tin 【E1†L1-L3】.", [_source("E1", 7, "Lịch học")], "token-lines"
+    )
+
+    assert "[E1]</a>" in rendered
+    assert 'data-citation-id="E1"' in rendered
+    assert "†L1-L3" not in rendered
+    assert linked["E1"]["page"] == 7
+
+
+def test_structured_markdown_answer_keeps_citations_interactive_inline():
+    answer = (
+        "### 1. **Đăng ký chính thức**\n\n"
+        "- **Sinh viên đúng tiến độ:**\n"
+        "  - Từ **25/07/2026 đến 29/07/2026** [E1].\n"
+        "- **Đăng ký bổ sung:** Từ **10/08/2026 đến 18/08/2026** [E2]."
+    )
+
+    rendered, linked = build_inline_answer_html(
+        answer,
+        [_source("E1", 2, "Lịch học"), _source("E2", 7, "Lịch học")],
+        "token-structured",
+    )
+
+    assert "<h3>1. <strong>Đăng ký chính thức</strong></h3>" in rendered
+    assert "<strong>Sinh viên đúng tiến độ:</strong>" in rendered
+    assert "<strong>25/07/2026 đến 29/07/2026</strong>" in rendered
+    assert 'data-citation-token="token-structured" data-citation-id="E1"' in rendered
+    assert 'data-citation-token="token-structured" data-citation-id="E2"' in rendered
+    assert list(linked) == ["E1", "E2"]
+    assert rendered.index('data-citation-id="E1"') < rendered.index(
+        'data-citation-id="E2"'
+    )
+
+
 def test_preview_preserves_unicode_newlines_and_escapes_source_html():
     source = {
         **_source("E1", 5, '<Tài liệu "gốc">'),
@@ -45,12 +81,68 @@ def test_preview_preserves_unicode_newlines_and_escapes_source_html():
 
     rendered, linked = build_inline_answer_html("Trích dẫn [E1].", [source], "token-2")
 
-    assert '<strong class="citation-preview__title">&lt;Tài liệu &quot;gốc&quot;&gt;</strong>' in rendered
+    assert '<strong class="citation-preview__title">E1.pdf</strong>' in rendered
+    assert (
+        '<span class="citation-preview__document-title">'
+        '&lt;Tài liệu &quot;gốc&quot;&gt;</span>'
+    ) in rendered
     assert "Trang 05" in rendered
     assert "Dòng tiếng Việt thứ nhất.\nDòng thứ hai" in rendered
     assert "&lt;script&gt;alert(1)&lt;/script&gt; &amp; dữ liệu." in rendered
     assert "<script>" not in rendered
     assert linked["E1"]["evidence_text"] == source["evidence_text"]
+
+
+def test_long_preview_keeps_the_complete_source_text():
+    source = {
+        **_source("E1", 1, "Tài liệu dài"),
+        "evidence_text": "Điều khoản nguyên văn.\n" * 100,
+    }
+
+    rendered, linked = build_inline_answer_html(
+        "Nội dung [E1].", [source], "token-long"
+    )
+
+    assert source["evidence_text"] in rendered
+    assert linked["E1"]["evidence_text"] == source["evidence_text"]
+
+
+def test_table_preview_keeps_full_cell_text_and_column_mapping():
+    source = {
+        **_source("E1", 7, "Kế hoạch"),
+        "source_filename": "ke_hoach_hk1_2026.pdf",
+        "evidence_text": "Đợt học 26\nTừ 10/8 đến 30/8/2026",
+        "table_headers": ["Lớp học", "Thời gian đăng ký"],
+        "table_locations": [
+            {"text": "Đợt học 26", "bbox": [10, 10, 20, 20]},
+            {"text": "Từ 10/8 đến 30/8/2026", "bbox": [20, 10, 40, 20]},
+        ],
+    }
+
+    rendered, linked = build_inline_answer_html(
+        "Thông tin [E1].", [source], "token-table"
+    )
+
+    assert "<strong class=\"citation-preview__title\">ke_hoach_hk1_2026.pdf</strong>" in rendered
+    assert "Cột theo thứ tự: Lớp học · Thời gian đăng ký" in rendered
+    assert "Xem nguồn</button>" in rendered
+    assert "Đợt học 26\nTừ 10/8 đến 30/8/2026" in rendered
+    assert linked["E1"]["table_locations"] == source["table_locations"]
+
+
+def test_text_evidence_popover_contains_source_filename_and_open_source_action():
+    source = {
+        **_source("E1", 2, "Thông báo về học phí"),
+        "source_filename": "hoc_phi.pdf",
+    }
+
+    rendered, _ = build_inline_answer_html(
+        "Hạn nộp [E1].", [source], "token-source-link"
+    )
+
+    assert "<strong class=\"citation-preview__title\">hoc_phi.pdf</strong>" in rendered
+    assert "Xem nguồn</button>" in rendered
+    assert 'data-citation-token="token-source-link" data-citation-id="E1"' in rendered
 
 
 def test_answer_html_is_escaped_without_losing_markdown():
@@ -65,12 +157,12 @@ def test_answer_html_is_escaped_without_losing_markdown():
 
 
 def test_unknown_or_invalid_citations_are_not_registered_or_linked():
-    answer = "Nguồn hợp lệ [E1], mã không rõ [E9]."
+    answer = "Nguồn hợp lệ [E1], mã không rõ 【E9†L1-L3】."
     incomplete = {**_source("E1", 2, "Quy chế"), "evidence_text": ""}
 
     rendered, linked = build_inline_answer_html(answer, [incomplete], "token-4")
 
-    assert "[E1]" in rendered and "[E9]" in rendered
+    assert "[E1]" in rendered and "【E9†L1-L3】" in rendered
     assert "citation-marker" not in rendered
     assert linked == {}
 

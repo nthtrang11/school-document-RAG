@@ -86,7 +86,9 @@ def build_strategy(
             return load_strategy(strategy)
 
     LOGGER.info("Đang tạo embeddings %s (%d chunks)", strategy, len(chunks))
-    vectors = SentenceTransformerEmbedder().encode([chunk.text for chunk in chunks])
+    vectors = SentenceTransformerEmbedder().encode(
+        [chunk.search_text or chunk.text for chunk in chunks]
+    )
     if vectors.shape[0] != len(chunks):
         raise ValueError("Số vector không khớp số chunk")
     bm25 = BM25Index(chunks)

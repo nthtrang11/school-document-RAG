@@ -20,7 +20,11 @@ def tokenize(text: str) -> list[str]:
 class BM25Index:
     def __init__(self, chunks: list[ChunkRecord], tokenized: list[list[str]] | None = None):
         self.chunks = chunks
-        self.tokens = tokenized if tokenized is not None else [tokenize(c.text) for c in chunks]
+        self.tokens = (
+            tokenized
+            if tokenized is not None
+            else [tokenize(c.search_text or c.text) for c in chunks]
+        )
         if len(self.tokens) != len(self.chunks):
             raise ValueError("BM25 corpus token mapping không khớp chunks")
         self._index = BM25Okapi(self.tokens) if self.tokens else None

@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from src.chunking.common import make_chunk, section_for
+from src.chunking.common import (
+    make_chunk,
+    make_table_chunks,
+    section_for,
+    word_aligned_end,
+    word_aligned_start,
+)
 from src.config import settings
 from src.models import ChunkRecord, DocumentMetadata, PageRecord
 
@@ -24,15 +30,19 @@ def chunk_pages(
         if not text:
             continue
         section: str | None = None
-        for start in range(0, len(text), size - step_overlap):
+        start = 0
+        while start < len(text):
             end = min(start + size, len(text))
-            if not text[start:end].strip():
-                continue
+            if end < len(text):
+                end = word_aligned_end(text, end)
+            chunk_text = text[start:end].strip()
+            if not chunk_text:
+                break
             section = section_for(text[:end], section)
             chunks.append(
                 make_chunk(
                     page,
-                    text[start:end],
+                    chunk_text,
                     "fixed_size",
                     start,
                     section,
@@ -41,4 +51,13 @@ def chunk_pages(
             )
             if end == len(text):
                 break
+            next_start = word_aligned_start(text, start, end - step_overlap)
+            start = next_start if next_start > start else end
+        chunks.extend(
+            make_table_chunks(
+                page,
+                "fixed_size",
+                (metadata_by_document or {}).get(page.document_id),
+            )
+        )
     return chunks

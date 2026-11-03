@@ -1,14 +1,14 @@
 {
-  "chunk_count": 44,
-  "average_characters": 793.8409090909091,
-  "minimum_characters": 135,
-  "maximum_characters": 900,
+  "chunk_count": 61,
+  "average_characters": 692.4918032786885,
+  "minimum_characters": 56,
+  "maximum_characters": 909,
   "empty_chunks": 0,
   "chunks_missing_metadata": 0,
   "chunks_per_document": {
-    "doc_1eafdae651f9a848": 6,
+    "doc_1eafdae651f9a848": 11,
     "doc_37ba075bf76a9912": 6,
     "doc_58c30a9e00ff7193": 3,
-    "doc_1222c0f07b6ebeb9": 29
+    "doc_1222c0f07b6ebeb9": 41
   }
 }

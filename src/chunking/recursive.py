@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import re
 
-from src.chunking.common import make_chunk, section_for
+from src.chunking.common import (
+    make_chunk,
+    make_table_chunks,
+    section_for,
+    word_aligned_end,
+    word_aligned_start,
+)
 from src.config import settings
 from src.models import ChunkRecord, DocumentMetadata, PageRecord
 
@@ -23,13 +29,17 @@ def _split_text(text: str, size: int, overlap: int) -> list[tuple[int, str]]:
     for boundary in boundaries[1:]:
         if boundary - start <= size:
             continue
-        candidate = text[start:boundary].strip()
+        raw_candidate = text[start:boundary]
+        leading = len(raw_candidate) - len(raw_candidate.lstrip())
+        candidate = raw_candidate.strip()
         if candidate:
-            segments.append((start, candidate))
+            segments.append((start + leading, candidate))
         start = boundary
-    tail = text[start:].strip()
+    raw_tail = text[start:]
+    leading = len(raw_tail) - len(raw_tail.lstrip())
+    tail = raw_tail.strip()
     if tail:
-        segments.append((start, tail))
+        segments.append((start + leading, tail))
 
     output: list[tuple[int, str]] = []
     for offset, segment in segments:
@@ -40,13 +50,12 @@ def _split_text(text: str, size: int, overlap: int) -> list[tuple[int, str]]:
         while cursor < len(segment):
             end = min(cursor + size, len(segment))
             if end < len(segment):
-                split = segment.rfind(" ", cursor, end)
-                if split > cursor + size // 2:
-                    end = split
+                end = word_aligned_end(segment, end)
             output.append((offset + cursor, segment[cursor:end].strip()))
             if end == len(segment):
                 break
-            cursor = max(cursor + 1, end - overlap)
+            next_cursor = word_aligned_start(segment, cursor, end - overlap)
+            cursor = next_cursor if next_cursor > cursor else end
     return output
 
 
@@ -78,4 +87,11 @@ def chunk_pages(
                     (metadata_by_document or {}).get(page.document_id),
                 )
             )
+        chunks.extend(
+            make_table_chunks(
+                page,
+                "recursive",
+                (metadata_by_document or {}).get(page.document_id),
+            )
+        )
     return chunks
