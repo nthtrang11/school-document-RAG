@@ -1,6 +1,6 @@
 {
-  "chunk_count": 61,
-  "average_characters": 692.4918032786885,
+  "chunk_count": 65,
+  "average_characters": 699.6923076923077,
   "minimum_characters": 56,
   "maximum_characters": 909,
   "empty_chunks": 0,
@@ -9,6 +9,7 @@
     "doc_1eafdae651f9a848": 11,
     "doc_37ba075bf76a9912": 6,
     "doc_58c30a9e00ff7193": 3,
-    "doc_1222c0f07b6ebeb9": 41
+    "doc_1222c0f07b6ebeb9": 41,
+    "doc_8d15770cfa1396d7": 4
   }
 }

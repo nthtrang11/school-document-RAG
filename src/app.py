@@ -16,6 +16,11 @@ import streamlit as st
 
 from src.config import settings
 from src.indexing.index_manager import IndexBundle, load_strategy
+from src.ingestion.upload_service import (
+    UploadPayload,
+    load_upload_registry,
+    process_pdf_uploads,
+)
 from src.rag.answer_generator import generate_answer
 from src.rag.citation_validator import retrieval_only_response
 from src.rag.context_builder import build_context
@@ -103,17 +108,30 @@ def get_retriever(strategy: str) -> HybridRetriever:
 
 
 def _document_catalog(bundle: IndexBundle) -> pd.DataFrame:
+    uploaded_records = load_upload_registry()
+    completed_uploads = {
+        str(record.get("document_id")): record
+        for record in uploaded_records
+        if record.get("document_id")
+        and record.get("processing_status") == "completed"
+    }
     rows = {}
     for chunk in bundle.chunks:
         meta = chunk.metadata
+        upload = completed_uploads.get(chunk.document_id, {})
+        source_path = meta.get("source_path") or ""
         rows[chunk.document_id] = {
             "document_id": chunk.document_id,
+            "filename": upload.get("filename") or Path(source_path).name or "Chưa xác định",
             "title": meta.get("title_subject") or "Chưa xác định tiêu đề",
             "number_symbol": meta.get("number_symbol") or "Chưa xác định",
             "issue_date": meta.get("issue_date") or "Chưa xác định",
             "document_type": meta.get("document_type") or "Chưa xác định",
             "issuing_authority": meta.get("issuing_authority") or "Chưa xác định",
-            "source_path": meta.get("source_path") or "",
+            "page_count": meta.get("page_count") or "Chưa xác định",
+            "uploaded_at": upload.get("uploaded_at") or "Chưa xác định",
+            "processing_status": "completed",
+            "source_path": source_path,
             "source_url": meta.get("source_url") or "",
         }
     return pd.DataFrame(rows.values())
@@ -121,6 +139,83 @@ def _document_catalog(bundle: IndexBundle) -> pd.DataFrame:
 
 st.title("Cổng tra cứu thông tin, thông báo và văn bản")
 st.caption("Tra cứu trên tài liệu đã nạp; câu trả lời cần có nguồn để kiểm chứng.")
+
+with st.popover("+ Tải tài liệu mới"):
+    st.write("Chọn một hoặc nhiều PDF. Tài liệu chỉ được công bố sau khi cả hai chỉ mục hoàn tất.")
+    upload_version = st.session_state.setdefault("upload_widget_version", 0)
+    uploaded_files = st.file_uploader(
+        "Tệp PDF",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key=f"pdf_upload_{upload_version}",
+        max_upload_size=settings.max_pdf_upload_mb,
+        help=f"Tối đa {settings.max_pdf_upload_mb} MB cho mỗi tệp.",
+    )
+    upload_columns = st.columns(2)
+    confirm_upload = upload_columns[0].button(
+        "Tải lên và xử lý",
+        type="primary",
+        disabled=not uploaded_files,
+        key="confirm_pdf_upload",
+    )
+    cancel_upload = upload_columns[1].button("Hủy", key="cancel_pdf_upload")
+
+    if cancel_upload:
+        st.session_state["upload_widget_version"] = upload_version + 1
+        st.rerun()
+
+    if confirm_upload and uploaded_files:
+        with st.status("Đang kiểm tra tài liệu...", expanded=True) as upload_status:
+            results = process_pdf_uploads(
+                [
+                    UploadPayload(file.name, file.getvalue())
+                    for file in uploaded_files
+                ],
+                on_stage=lambda _stage, detail: upload_status.update(label=detail),
+            )
+            final_state = (
+                "complete"
+                if all(result.status in {"completed", "duplicate"} for result in results)
+                else "error"
+            )
+            upload_status.update(
+                label=(
+                    "Đã xử lý xong."
+                    if final_state == "complete"
+                    else "Có tài liệu chưa được tích hợp."
+                ),
+                state=final_state,
+                expanded=False,
+            )
+        st.session_state["upload_results"] = [
+            {
+                "filename": result.filename,
+                "status": result.status,
+                "message": result.message,
+                "document_id": result.document_id,
+                "page_count": result.page_count,
+            }
+            for result in results
+        ]
+        st.session_state["upload_widget_version"] = upload_version + 1
+        if any(result.status == "completed" for result in results):
+            get_index.clear()
+            get_retriever.clear()
+        st.rerun()
+
+if st.session_state.get("upload_results"):
+    for upload_result in st.session_state.pop("upload_results"):
+        detail = upload_result["message"]
+        if upload_result.get("document_id"):
+            detail += f" · Document ID `{upload_result['document_id']}`"
+        if upload_result.get("page_count"):
+            detail += f" · {upload_result['page_count']} trang"
+        if upload_result["status"] == "completed":
+            st.success(f"{upload_result['filename']}: {detail}")
+        elif upload_result["status"] == "duplicate":
+            st.warning(f"{upload_result['filename']}: {detail}")
+        else:
+            st.error(f"{upload_result['filename']}: {detail}")
 
 available = [
     strategy
@@ -297,9 +392,38 @@ if chat_query:
 
 st.subheader("Danh mục tài liệu")
 st.dataframe(
-    catalog[["title", "number_symbol", "issue_date", "issuing_authority"]],
+    catalog[
+        [
+            "filename",
+            "title",
+            "document_type",
+            "number_symbol",
+            "issue_date",
+            "issuing_authority",
+            "page_count",
+            "uploaded_at",
+            "processing_status",
+        ]
+    ],
     hide_index=True,
 )
+
+upload_records = load_upload_registry()
+if upload_records:
+    with st.expander("Lịch sử tải tài liệu"):
+        st.dataframe(
+            pd.DataFrame(upload_records)[
+                [
+                    "filename",
+                    "processing_status",
+                    "uploaded_at",
+                    "document_id",
+                    "page_count",
+                    "message",
+                ]
+            ],
+            hide_index=True,
+        )
 
 if summary_path.exists():
     with st.expander("Trạng thái ingestion"):

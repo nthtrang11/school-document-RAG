@@ -1,9 +1,9 @@
 {
   "strategy": "fixed_size",
-  "fingerprint": "83ba9a4f81a388d20dd337abf6e924f9fe5c1bb5490c9e3421b80521c5e9af50",
+  "fingerprint": "4cef1ec4bf59e50609a108dcb962752f60f4604f3fc58f2cffcf5354bc3e500d",
   "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
   "chunk_size": 900,
   "chunk_overlap": 120,
-  "chunk_count": 61,
-  "faiss_vectors": 61
+  "chunk_count": 65,
+  "faiss_vectors": 65
 }

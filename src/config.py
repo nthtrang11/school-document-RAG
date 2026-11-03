@@ -25,6 +25,7 @@ class Settings(BaseModel):
     excluded_documents: tuple[str, ...] = ()
     chunk_size: int = Field(default=900, ge=100)
     chunk_overlap: int = Field(default=120, ge=0)
+    max_pdf_upload_mb: int = Field(default=50, ge=1)
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     embedding_batch_size: int = Field(default=32, ge=1)
     bm25_top_k: int = Field(default=8, ge=1)
@@ -87,6 +88,7 @@ class Settings(BaseModel):
             excluded_documents=excluded,
             chunk_size=int(os.getenv("CHUNK_SIZE", "900")),
             chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "120")),
+            max_pdf_upload_mb=int(os.getenv("MAX_PDF_UPLOAD_MB", "50")),
             embedding_model=os.getenv(
                 "EMBEDDING_MODEL",
                 "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",

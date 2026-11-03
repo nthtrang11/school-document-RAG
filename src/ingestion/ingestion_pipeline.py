@@ -76,9 +76,12 @@ def _preserve_existing_metadata(
     return current.model_copy(update=updates)
 
 
-def run_ingestion(pdf_dir: Path | None = None) -> dict[str, int]:
+def run_ingestion(
+    pdf_dir: Path | None = None,
+    output_dir: Path | None = None,
+) -> dict[str, int]:
     source_dir = pdf_dir or settings.pdf_dir
-    output_dir = settings.processed_dir
+    output_dir = output_dir or settings.processed_dir
     previous_metadata = _load_existing_metadata(output_dir / "documents.jsonl")
     files = sorted(source_dir.rglob("*.pdf")) if source_dir.exists() else []
     seen_hashes: set[str] = set()

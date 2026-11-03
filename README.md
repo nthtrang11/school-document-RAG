@@ -91,6 +91,10 @@ Với endpoint Gemini OpenAI-compatible, ứng dụng tự đặt `reasoning_eff
 
    Kết quả gồm `pages_raw.jsonl`, `pages_clean.jsonl`, `documents.jsonl`, danh sách hợp lệ/bị loại và `ingestion_summary.json` trong `data/processed/`. PDF có text-layer được đọc theo thứ tự tọa độ trang; bảng được lưu theo hàng/cột với header, trạng thái ô, span và bbox. Header hiện trích từ hàng header do PyMuPDF nhận diện; nhãn con không có trong nguồn được đánh dấu chưa xác định, không suy diễn. Nếu số hiệu hoặc ngày ở header vẫn thiếu/không đầy đủ, pipeline chỉ OCR vùng header trang đầu và lưu nguồn/trang bằng chứng. Tài liệu scan không có text-layer vẫn cần OCR toàn văn riêng trước khi index.
 
+Trong ứng dụng, dùng **+ Tải tài liệu mới** để chọn một hoặc nhiều PDF (mặc định tối đa 50 MB mỗi tệp; chỉnh qua `MAX_PDF_UPLOAD_MB`). Hệ thống kiểm tra chữ ký PDF, khả năng đọc, nội dung, thông tin cá nhân và SHA-256; bản PDF được lưu bền vững trong `data/raw/uploaded/` với tên lưu có tiền tố hash, còn lịch sử/trạng thái nằm ở `data/uploaded_documents.jsonl`. Tệp trùng nội dung không được lập chỉ mục lại; cùng tên nhưng nội dung khác được lưu thành tài liệu riêng.
+
+Upload dùng lại ingestion hiện tại, dựng thử dữ liệu processed cùng cả hai chiến lược Fixed-size/Recursive trong vùng staging, xác minh BM25/FAISS và chỉ công bố sau khi cả hai hợp lệ. Nếu thất bại, bản processed và index đang hoạt động được khôi phục; ứng dụng làm mới cache sau khi thành công nên không cần khởi động lại. Kiến trúc index hiện lưu toàn corpus theo chiến lược, vì vậy upload sẽ tái-ingest và tái-embed corpus hiện có thay vì cập nhật incremental; tiến trình hiển thị rõ các giai đoạn và có thể mất thời gian khi corpus lớn. PDF scan không có text layer bị từ chối nếu không trích xuất được nội dung; OCR hiện có chỉ hỗ trợ vùng header, không phải OCR toàn văn.
+
 3. Tạo hai index độc lập:
 
    ```powershell

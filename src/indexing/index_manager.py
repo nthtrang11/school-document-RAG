@@ -33,8 +33,8 @@ class IndexBundle:
     model_name: str
 
 
-def _metadata_map() -> dict[str, DocumentMetadata]:
-    path = settings.processed_dir / "documents.jsonl"
+def _metadata_map(processed_dir: Path | None = None) -> dict[str, DocumentMetadata]:
+    path = (processed_dir or settings.processed_dir) / "documents.jsonl"
     if not path.exists():
         return {}
     return {
@@ -57,17 +57,20 @@ def build_strategy(
     strategy: str,
     pages_path: Path | None = None,
     force: bool = False,
+    *,
+    output_root: Path | None = None,
+    processed_dir: Path | None = None,
 ) -> IndexBundle:
     if strategy not in {"fixed_size", "recursive"}:
         raise ValueError(f"Unsupported strategy: {strategy}")
     pages = load_page_records(pages_path)
-    metadata = _metadata_map()
+    metadata = _metadata_map(processed_dir)
     chunk_fn = fixed_chunks if strategy == "fixed_size" else recursive_chunks
     chunks = chunk_fn(pages, metadata, settings.chunk_size, settings.chunk_overlap)
     if not chunks:
         raise ValueError("Không có chunk văn bản để lập chỉ mục")
 
-    output = settings.index_dir / strategy
+    output = (output_root or settings.index_dir) / strategy
     output.mkdir(parents=True, exist_ok=True)
     manifest_path = output / "manifest.json"
     expected = _fingerprint(chunks, settings.embedding_model)
@@ -119,8 +122,8 @@ def build_strategy(
     return IndexBundle(strategy, chunks, bm25, faiss_index, settings.embedding_model)
 
 
-def load_strategy(strategy: str) -> IndexBundle:
-    folder = settings.index_dir / strategy
+def load_strategy(strategy: str, index_root: Path | None = None) -> IndexBundle:
+    folder = (index_root or settings.index_dir) / strategy
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
     chunks = [
         ChunkRecord.model_validate_json(line)
