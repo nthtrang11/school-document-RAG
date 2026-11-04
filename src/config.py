@@ -20,12 +20,19 @@ class Settings(BaseModel):
     web_dir: Path = PROJECT_ROOT / "data" / "raw" / "web"
     processed_dir: Path = PROJECT_ROOT / "data" / "processed"
     evaluation_file: Path = PROJECT_ROOT / "data" / "evaluation" / "questions.csv"
+    evaluation_min_verified_questions: int = Field(default=15, ge=1)
     index_dir: Path = PROJECT_ROOT / "indexes"
     results_dir: Path = PROJECT_ROOT / "results"
     excluded_documents: tuple[str, ...] = ()
     chunk_size: int = Field(default=900, ge=100)
     chunk_overlap: int = Field(default=120, ge=0)
     max_pdf_upload_mb: int = Field(default=50, ge=1)
+    ocr_render_scale: float = Field(default=2.0, ge=1.0, le=4.0)
+    ocr_min_confidence: float = Field(default=0.9, ge=0.0, le=1.0)
+    ocr_min_valid_character_ratio: float = Field(default=0.8, ge=0.0, le=1.0)
+    ocr_min_text_characters: int = Field(default=20, ge=1)
+    ocr_min_text_quality_score: float = Field(default=0.65, ge=0.0, le=1.0)
+    ocr_hybrid_image_area_ratio: float = Field(default=0.15, ge=0.0, le=1.0)
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     embedding_batch_size: int = Field(default=32, ge=1)
     bm25_top_k: int = Field(default=8, ge=1)
@@ -83,12 +90,27 @@ class Settings(BaseModel):
             evaluation_file=path_value(
                 "EVALUATION_FILE", root / "data" / "evaluation" / "questions.csv"
             ),
+            evaluation_min_verified_questions=int(
+                os.getenv("EVALUATION_MIN_VERIFIED_QUESTIONS", "15")
+            ),
             index_dir=path_value("INDEX_DIR", root / "indexes"),
             results_dir=path_value("RESULTS_DIR", root / "results"),
             excluded_documents=excluded,
             chunk_size=int(os.getenv("CHUNK_SIZE", "900")),
             chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "120")),
             max_pdf_upload_mb=int(os.getenv("MAX_PDF_UPLOAD_MB", "50")),
+            ocr_render_scale=float(os.getenv("OCR_RENDER_SCALE", "2.0")),
+            ocr_min_confidence=float(os.getenv("OCR_MIN_CONFIDENCE", "0.9")),
+            ocr_min_valid_character_ratio=float(
+                os.getenv("OCR_MIN_VALID_CHARACTER_RATIO", "0.8")
+            ),
+            ocr_min_text_characters=int(os.getenv("OCR_MIN_TEXT_CHARACTERS", "20")),
+            ocr_min_text_quality_score=float(
+                os.getenv("OCR_MIN_TEXT_QUALITY_SCORE", "0.65")
+            ),
+            ocr_hybrid_image_area_ratio=float(
+                os.getenv("OCR_HYBRID_IMAGE_AREA_RATIO", "0.15")
+            ),
             embedding_model=os.getenv(
                 "EMBEDDING_MODEL",
                 "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from collections import Counter
 from datetime import date
+from time import perf_counter
 from typing import Any
 
 from src.config import settings
@@ -15,12 +17,34 @@ from src.indexing.index_manager import IndexBundle
 from src.models import SearchFilter
 from src.retrieval.query_processor import (
     is_document_identity_query,
+    is_health_insurance_payment_query,
     is_monthly_rate_query,
     is_payment_deadline_query,
     is_registration_schedule_query,
+    is_tuition_deadline_query,
     process_query,
 )
 from src.retrieval.rrf import reciprocal_rank_fusion
+
+_DATE_IN_TEXT = re.compile(
+    r"\b\d{1,2}\s*(?:[/\-]\s*\d{1,2}\s*[/\-]\s*\d{4}|"
+    r"tháng\s*\d{1,2}\s*năm\s*\d{4})\b",
+    re.IGNORECASE,
+)
+_DEADLINE_IN_TEXT = re.compile(
+    r"\b(?:th(?:oi|di) han|han|den het|truoc ngay|"
+    r"cham nhat|gia han|nop truoc|thoi gian thu|thoi gian nop)\b",
+    re.IGNORECASE,
+)
+
+
+def _fold_search_text(text: str) -> str:
+    decomposed = unicodedata.normalize("NFD", text.casefold()).replace("đ", "d")
+    return "".join(
+        character
+        for character in decomposed
+        if unicodedata.category(character) != "Mn"
+    )
 
 
 def _matches(chunk: Any, filters: SearchFilter | dict[str, Any] | None) -> bool:
@@ -74,6 +98,41 @@ def _matches_query(chunk: Any, query: str) -> bool:
             for cell in cells
         )
     return True
+
+
+def _matches_payment_topic(query: str, text: str) -> bool:
+    folded_text = text.casefold()
+    if is_tuition_deadline_query(query) and not any(
+        phrase in folded_text for phrase in ("học phí", "hoc phi", "tiền học", "tien hoc")
+    ):
+        return False
+    if is_health_insurance_payment_query(query) and not any(
+        phrase in folded_text
+        for phrase in ("bảo hiểm y tế", "bao hiem y te", "bhyt")
+    ):
+        return False
+    return True
+
+
+def _matches_payment_deadline_chunk(query: str, chunk: Any) -> bool:
+    table_headers = chunk.metadata.get("table_headers") or []
+    table_cells = chunk.metadata.get("table_cells") or []
+    text = " ".join(
+        str(value)
+        for value in (
+            chunk.search_text or chunk.text,
+            chunk.metadata.get("title_subject"),
+            chunk.metadata.get("table_title"),
+            " ".join(str(value) for value in table_headers),
+            " ".join(str(value) for value in table_cells),
+        )
+        if value
+    )
+    return (
+        _matches_payment_topic(query, text)
+        and bool(_DATE_IN_TEXT.search(text))
+        and bool(_DEADLINE_IN_TEXT.search(_fold_search_text(text)))
+    )
 
 
 def _asks_for_table_values(query: str) -> bool:
@@ -178,6 +237,29 @@ class HybridRetriever:
             table_key = (chunk.document_id, str(table_group_id))
             self._table_groups.setdefault(table_key, []).append(chunk.chunk_id)
             self._table_group_by_chunk[chunk.chunk_id] = table_key
+        self._related_documents: dict[str, set[str]] = {}
+        for chunk in bundle.chunks:
+            relations = chunk.metadata.get("document_relations")
+            if not isinstance(relations, list):
+                continue
+            for relation in relations:
+                if not isinstance(relation, dict):
+                    continue
+                target_id = relation.get("target_document_id")
+                if not target_id:
+                    continue
+                if relation.get("relation_type") not in {
+                    "amends",
+                    "extends",
+                    "replaces",
+                }:
+                    continue
+                self._related_documents.setdefault(chunk.document_id, set()).add(
+                    str(target_id)
+                )
+                self._related_documents.setdefault(str(target_id), set()).add(
+                    chunk.document_id
+                )
 
         table_text_by_id = {
             chunk.chunk_id: " ".join(
@@ -264,6 +346,7 @@ class HybridRetriever:
         filters: SearchFilter | dict[str, Any] | None = None,
         top_k: int | None = None,
     ) -> dict[str, Any]:
+        total_started = perf_counter()
         processed = process_query(query)
         valid_indexes = [
             index
@@ -275,12 +358,15 @@ class HybridRetriever:
             self.bundle.chunks[index].chunk_id for index in valid_indexes
         }
         bm25_query = str(processed["bm25_query"])
+        bm25_started = perf_counter()
         bm25_all = self._search_bm25.search(
             bm25_query, len(self.bundle.chunks)
         )
         bm25 = [(index, score) for index, score in bm25_all if index in allowed][
             : settings.bm25_top_k
         ]
+        bm25_latency = perf_counter() - bm25_started
+        faiss_started = perf_counter()
         if self.embedder is None:
             self.embedder = SentenceTransformerEmbedder(self.bundle.model_name)
         query_vector = self.embedder.encode([query])[0]
@@ -288,9 +374,12 @@ class HybridRetriever:
         faiss_results = [(index, score) for index, score in faiss_all if index in allowed][
             : settings.faiss_top_k
         ]
+        faiss_latency = perf_counter() - faiss_started
         bm25_ranked = [(self.bundle.chunks[i].chunk_id, score) for i, score in bm25]
         faiss_ranked = [(self.bundle.chunks[i].chunk_id, score) for i, score in faiss_results]
+        rrf_started = perf_counter()
         fused = reciprocal_rank_fusion([bm25_ranked, faiss_ranked], settings.rrf_k)
+        rrf_latency = perf_counter() - rrf_started
         fused_score_by_id = dict(fused)
 
         exact_symbols = processed["exact_symbols"]
@@ -306,6 +395,14 @@ class HybridRetriever:
                 for symbol in exact_symbols
             )
         }
+        if is_payment_deadline_query(query):
+            exact_ids = {
+                chunk_id
+                for chunk_id in exact_ids
+                if _matches_payment_deadline_chunk(
+                    query, self._by_id[chunk_id]
+                )
+            }
         query_phrases = self._ngrams(tokenize(query))
         table_count = len(self._table_phrases)
         table_phrase_scores = {
@@ -349,9 +446,78 @@ class HybridRetriever:
                 self.bundle.chunks[self._table_chunk_indexes[index]], filters
             )
         ]
-        ordered_ids = [
+        if is_payment_deadline_query(query):
+            table_phrase_ids = [
+                chunk_id
+                for chunk_id in table_phrase_ids
+                if _matches_payment_deadline_chunk(
+                    query, self._by_id[chunk_id]
+                )
+            ]
+            table_search_ids = [
+                chunk_id
+                for chunk_id in table_search_ids
+                if _matches_payment_deadline_chunk(
+                    query, self._by_id[chunk_id]
+                )
+            ]
+        payment_deadline_ids: list[str] = []
+        if is_payment_deadline_query(query):
+            bm25_score_by_index = {index: score for index, score in bm25}
+            candidates_by_document: dict[
+                str, tuple[tuple[int, float, str], str]
+            ] = {}
+            for index in valid_indexes:
+                chunk = self.bundle.chunks[index]
+                if not _matches_payment_deadline_chunk(query, chunk):
+                    continue
+                text = " ".join(
+                    (
+                        chunk.search_text or chunk.text,
+                        str(chunk.metadata.get("title_subject") or ""),
+                    )
+                )
+                folded_text = text.casefold()
+                if not any(
+                    phrase in folded_text
+                    for phrase in ("học phí", "hoc phi", "nộp phí", "nop phi")
+                ):
+                    continue
+                relations = chunk.metadata.get("document_relations") or []
+                has_update_relation = any(
+                    isinstance(relation, dict)
+                    and relation.get("relation_type") in {"amends", "extends"}
+                    for relation in relations
+                )
+                issue_date = str(chunk.metadata.get("issue_date") or "")
+                score = (
+                    int(has_update_relation),
+                    bm25_score_by_index.get(index, 0.0),
+                    issue_date,
+                )
+                previous = candidates_by_document.get(chunk.document_id)
+                if previous is None or score > previous[0]:
+                    candidates_by_document[chunk.document_id] = (
+                        score,
+                        chunk.chunk_id,
+                    )
+            payment_deadline_ids = [
+                candidate[1]
+                for candidate in sorted(
+                    candidates_by_document.values(),
+                    key=lambda item: item[0],
+                    reverse=True,
+                )
+            ]
+        ordered_ids = []
+        if is_payment_deadline_query(query):
+            ordered_ids.extend(payment_deadline_ids)
+        ordered_ids.extend(
             chunk.chunk_id for chunk in self.bundle.chunks if chunk.chunk_id in exact_ids
-        ]
+        )
+        ordered_ids.extend(
+            chunk_id for chunk_id in payment_deadline_ids if chunk_id not in ordered_ids
+        )
         schedule_group_keys: set[tuple[str, str]] = set()
         if _asks_for_table_values(query):
             table_candidates = list(
@@ -514,6 +680,10 @@ class HybridRetriever:
             chunk_id
             for chunk_id, _ in fused
             if chunk_id not in ordered_ids
+            and (
+                not is_payment_deadline_query(query)
+                or _matches_payment_deadline_chunk(query, self._by_id[chunk_id])
+            )
         )
         ordered_ids.extend(
             chunk_id
@@ -524,6 +694,20 @@ class HybridRetriever:
         selected_ids = ordered_ids[:limit]
         neighbor_ids = self._neighbor_text_chunk_ids(selected_ids, filters)
         expanded_ids = self._related_table_chunk_ids(selected_ids)
+        related_document_ids = {
+            related_id
+            for chunk_id in selected_ids
+            for related_id in self._related_documents.get(
+                self._by_id[chunk_id].document_id, set()
+            )
+        }
+        expanded_ids.extend(
+            chunk.chunk_id
+            for chunk in self.bundle.chunks
+            if chunk.document_id in related_document_ids
+            and _matches(chunk, filters)
+            and chunk.chunk_id not in expanded_ids
+        )
         if schedule_group_keys:
             expanded_ids.extend(
                 chunk_id
@@ -538,6 +722,12 @@ class HybridRetriever:
                 )
                 if chunk_id not in expanded_ids
             )
+        if is_payment_deadline_query(query):
+            expanded_ids = [
+                chunk_id
+                for chunk_id in expanded_ids
+                if _matches_payment_deadline_chunk(query, self._by_id[chunk_id])
+            ]
         result_ids = list(
             dict.fromkeys([*selected_ids, *neighbor_ids, *expanded_ids])
         )
@@ -567,4 +757,10 @@ class HybridRetriever:
             "rrf": fused,
             "results": results,
             "exact_symbols": exact_symbols,
+            "latency_seconds": {
+                "bm25": bm25_latency,
+                "faiss": faiss_latency,
+                "rrf": rrf_latency,
+                "hybrid": perf_counter() - total_started,
+            },
         }

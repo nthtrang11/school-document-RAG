@@ -1,4 +1,4 @@
-question_id,question,question_type,ground_truth_answer,relevant_document_id,relevant_chunk_ids,relevant_page,relevant_section,relevant_chunk_ids_fixed_size,relevant_chunk_ids_recursive,verification_status,source_file_hint
+question_id,question,question_type,ground_truth_answer,relevant_document_id,relevant_chunk_ids,relevant_page,relevant_section,relevant_chunk_ids_fixed_size,relevant_chunk_ids_recursive,verification_status,source_file_hint,relevant_document_ids,relevant_pages,relevance_scores,verified_by,verified_at,notes
 Q001,"Bảo hiểm y tế năm 2027: văn bản đề cập đến những khóa sinh viên nào?",Keyword Matching,,,,,,,,needs_manual_verification,bao_hiem_y_te.pdf
 Q002,"Thông báo 923/TB-ĐHGTVT ngày 14/10/2026 được nhắc đến ở phần nào của thông báo gia hạn học phí?",Keyword Matching,,,,,,,,needs_manual_verification,dang_ky_bs_15_va_gia_han_hoc_phi.pdf
 Q003,"Thông báo 406/TB-ĐHGTVT được nhắc đến trong thông báo lấy ý kiến phản hồi nào?",Keyword Matching,,,,,,,,needs_manual_verification,danh_gia_giang_vien.pdf

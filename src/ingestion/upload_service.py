@@ -10,10 +10,9 @@ import re
 import shutil
 import tempfile
 import threading
-import time
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Callable, Iterator
@@ -42,6 +41,7 @@ class UploadResult:
     document_id: str | None = None
     page_count: int | None = None
     uploaded_at: str | None = None
+    ocr_pages_needing_review: list[int] = field(default_factory=list)
 
 
 def upload_registry_path() -> Path:
@@ -296,7 +296,9 @@ def process_pdf_uploads(
 
                 pending = transaction_root / f"{uuid.uuid4().hex}.pdf"
                 pending.write_bytes(payload.content)
-                valid, reason = validate_pdf(pending, transaction_root, set())
+                valid, reason = validate_pdf(
+                    pending, transaction_root, set(), inspect_content=False
+                )
                 if not valid:
                     pending.unlink(missing_ok=True)
                     results[index] = UploadResult(
@@ -361,15 +363,42 @@ def process_pdf_uploads(
                 if not uploaded_ids.issubset(metadata_by_id):
                     raise ValueError("Một hoặc nhiều PDF tải lên không được ingestion chấp nhận.")
 
+                review_pages_by_document: dict[str, list[int]] = {}
+                clean_pages_path = staged_processed / "pages_clean.jsonl"
+                for line in clean_pages_path.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    page = json.loads(line)
+                    quality = page.get("ocr_quality")
+                    if (
+                        isinstance(quality, dict)
+                        and quality.get("status")
+                        in {"needs_review", "failed", "unreadable"}
+                    ):
+                        review_pages_by_document.setdefault(
+                            str(page["document_id"]), []
+                        ).append(int(page["page_no"]))
+
                 for index, path, digest, filename, timestamp in accepted_paths:
                     metadata = metadata_by_id[document_id_for(path, settings.pdf_dir)]
+                    review_pages = review_pages_by_document.get(
+                        document_id_for(path, settings.pdf_dir), []
+                    )
+                    message = "Tài liệu đã được tích hợp vào cả hai chỉ mục."
+                    if review_pages:
+                        message += (
+                            " Cần kiểm tra chất lượng OCR tại trang "
+                            + ", ".join(str(page) for page in review_pages)
+                            + "; nội dung các trang này không được đưa vào chỉ mục."
+                        )
                     results[index] = UploadResult(
                         filename,
                         "indexing",
-                        "Đang tạo chunks, embeddings và cập nhật cả hai chỉ mục.",
+                        message,
                         document_id=str(metadata["document_id"]),
                         page_count=int(metadata["page_count"]),
                         uploaded_at=timestamp,
+                        ocr_pages_needing_review=review_pages,
                     )
 
                 stage_callback("chunking", "Đang tạo chunks theo Fixed-size và Recursive.")
@@ -399,7 +428,22 @@ def process_pdf_uploads(
                     _make_record(
                         payloads[index],
                         "completed",
-                        "Đã ingestion và lập chỉ mục thành công cho cả hai chiến lược.",
+                        (
+                            "Đã ingestion và lập chỉ mục thành công cho cả hai chiến lược."
+                            if not review_pages_by_document.get(
+                                document_id_for(path, settings.pdf_dir)
+                            )
+                            else (
+                                "Đã lập chỉ mục; cần kiểm tra OCR trang "
+                                + ", ".join(
+                                    str(page)
+                                    for page in review_pages_by_document[
+                                        document_id_for(path, settings.pdf_dir)
+                                    ]
+                                )
+                                + ". Nội dung các trang này đã bị loại khỏi index."
+                            )
+                        ),
                         digest=digest,
                         document_id=document_id_for(path, settings.pdf_dir),
                         page_count=int(
@@ -424,15 +468,24 @@ def process_pdf_uploads(
                 stage_callback("completed", "Tài liệu đã có thể tìm kiếm.")
                 for index, path, _, filename, timestamp in accepted_paths:
                     document_id = document_id_for(path, settings.pdf_dir)
+                    review_pages = review_pages_by_document.get(document_id, [])
+                    message = "Đã tích hợp vào BM25, FAISS và RRF."
+                    if review_pages:
+                        message += (
+                            " Cần kiểm tra chất lượng OCR tại trang "
+                            + ", ".join(str(page) for page in review_pages)
+                            + "; nội dung các trang này không được đưa vào chỉ mục."
+                        )
                     results[index] = UploadResult(
                         _display_filename(payloads[index].filename),
                         "completed",
-                        "Đã tích hợp vào BM25, FAISS và RRF.",
+                        message,
                         document_id=document_id,
                         page_count=int(
                             metadata_by_id[document_id]["page_count"]
                         ),
                         uploaded_at=timestamp,
+                        ocr_pages_needing_review=review_pages,
                     )
             except BaseException:
                 for _, path, _, _, _ in accepted_paths:

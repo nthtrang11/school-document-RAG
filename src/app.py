@@ -21,6 +21,11 @@ from src.ingestion.upload_service import (
     load_upload_registry,
     process_pdf_uploads,
 )
+from src.models import DocumentMetadata
+from src.ingestion.metadata_review import (
+    load_metadata_records,
+    save_metadata_review_and_reindex,
+)
 from src.rag.answer_generator import generate_answer
 from src.rag.citation_validator import retrieval_only_response
 from src.rag.context_builder import build_context
@@ -194,6 +199,7 @@ with st.popover("+ Tải tài liệu mới"):
                 "message": result.message,
                 "document_id": result.document_id,
                 "page_count": result.page_count,
+                "ocr_pages_needing_review": result.ocr_pages_needing_review,
             }
             for result in results
         ]
@@ -210,8 +216,20 @@ if st.session_state.get("upload_results"):
             detail += f" · Document ID `{upload_result['document_id']}`"
         if upload_result.get("page_count"):
             detail += f" · {upload_result['page_count']} trang"
-        if upload_result["status"] == "completed":
+        if upload_result.get("ocr_pages_needing_review"):
+            detail += (
+                " · OCR cần rà soát trang "
+                + ", ".join(
+                    str(page)
+                    for page in upload_result["ocr_pages_needing_review"]
+                )
+            )
+        if upload_result["status"] == "completed" and not upload_result.get(
+            "ocr_pages_needing_review"
+        ):
             st.success(f"{upload_result['filename']}: {detail}")
+        elif upload_result["status"] == "completed":
+            st.warning(f"{upload_result['filename']}: {detail}")
         elif upload_result["status"] == "duplicate":
             st.warning(f"{upload_result['filename']}: {detail}")
         else:
@@ -407,6 +425,92 @@ st.dataframe(
     ],
     hide_index=True,
 )
+
+metadata_path = settings.processed_dir / "documents.jsonl"
+metadata_records = load_metadata_records(metadata_path)
+if metadata_records:
+    with st.expander("Xác minh metadata", expanded=False):
+        labels = {
+            record.document_id: (
+                f"{record.document_id} · "
+                f"{record.title_subject or record.number_symbol or 'Chưa có tiêu đề'} "
+                f"({record.metadata_verification_status})"
+            )
+            for record in metadata_records
+        }
+        selected_document_id = st.selectbox(
+            "Tài liệu cần rà soát",
+            list(labels),
+            format_func=lambda value: labels[value],
+            key="metadata_review_document",
+        )
+        selected_metadata = next(
+            record
+            for record in metadata_records
+            if record.document_id == selected_document_id
+        )
+        if selected_metadata.field_provenance:
+            st.json({
+                field: [
+                    evidence.model_dump(mode="json")
+                    for evidence in entries
+                ]
+                for field, entries in selected_metadata.field_provenance.items()
+            })
+        else:
+            st.info("Chưa có provenance; cần bổ sung bằng chứng trước khi xác minh.")
+
+        with st.form(f"metadata_review_form_{selected_document_id}"):
+            reviewed_json = st.text_area(
+                "Metadata JSON để xác nhận hoặc chỉnh sửa",
+                value=json.dumps(
+                    selected_metadata.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                height=320,
+                key=f"metadata_review_json_{selected_document_id}",
+                help=(
+                    "Khi sửa giá trị, cập nhật field_provenance tương ứng và giữ "
+                    "bằng chứng/trang nguồn."
+                ),
+            )
+            reviewer = st.text_input("Người rà soát")
+            review_notes = st.text_input("Ghi chú rà soát")
+            review_status = st.selectbox(
+                "Kết luận",
+                ["verified", "rejected"],
+                format_func=lambda value: (
+                    "Đã xác minh" if value == "verified" else "Từ chối giá trị"
+                ),
+            )
+            review_submitted = st.form_submit_button(
+                "Lưu kết quả rà soát", type="primary"
+            )
+        if review_submitted:
+            try:
+                reviewed = DocumentMetadata.model_validate_json(reviewed_json)
+                with st.status(
+                    "Đang lưu metadata và tái tạo hai bộ chỉ mục...",
+                    expanded=True,
+                ) as review_status_view:
+                    save_metadata_review_and_reindex(
+                        reviewed,
+                        reviewer=reviewer,
+                        status=review_status,
+                        notes=review_notes,
+                    )
+                    review_status_view.update(
+                        label="Đã lưu metadata và cập nhật cả hai chỉ mục.",
+                        state="complete",
+                        expanded=False,
+                    )
+            except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+                st.error(f"Không thể lưu metadata đã rà soát: {exc}")
+            else:
+                get_index.clear()
+                get_retriever.clear()
+                st.rerun()
 
 upload_records = load_upload_registry()
 if upload_records:

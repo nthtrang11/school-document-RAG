@@ -9,8 +9,6 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
-
 from src.chunking.fixed_size import chunk_pages as fixed_chunks
 from src.chunking.recursive import chunk_pages as recursive_chunks
 from src.chunking.statistics import summarize_chunks
@@ -140,11 +138,19 @@ def load_strategy(strategy: str, index_root: Path | None = None) -> IndexBundle:
         mapping = json.loads((folder / name).read_text(encoding="utf-8"))
         if mapping != expected_mapping:
             raise ValueError(f"{name} không nhất quán với corpus")
+    bm25_index = BM25Index.load(chunks, folder / "bm25_tokens.json")
+    faiss_index = FaissIndex.load(folder / "faiss.index")
+    if len(bm25_index.tokens) != len(chunks):
+        raise ValueError("Số BM25 records không khớp số chunks")
+    if faiss_index.index.ntotal != len(chunks):
+        raise ValueError("Số FAISS vectors không khớp số chunks")
+    if manifest.get("faiss_vectors") != faiss_index.index.ntotal:
+        raise ValueError("Manifest index không khớp số FAISS vectors")
     return IndexBundle(
         strategy=strategy,
         chunks=chunks,
-        bm25=BM25Index.load(chunks, folder / "bm25_tokens.json"),
-        faiss=FaissIndex.load(folder / "faiss.index"),
+        bm25=bm25_index,
+        faiss=faiss_index,
         model_name=manifest["embedding_model"],
     )
 

@@ -386,7 +386,7 @@ def test_validator_rejects_pdf_without_extractable_text(tmp_path: Path):
     document.close()
     valid, reason = validate_pdf(path, tmp_path, set())
     assert not valid
-    assert reason == "Không trích xuất được văn bản; cần OCR trước khi index"
+    assert reason == "Không có trang văn bản hoặc OCR đạt chất lượng để lập chỉ mục"
 
 
 def test_validator_accepts_structured_table_without_page_text(tmp_path, monkeypatch):

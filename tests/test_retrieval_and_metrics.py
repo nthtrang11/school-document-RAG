@@ -36,6 +36,15 @@ def test_bhyt_payment_deadline_queries_expand_to_document_wording():
     assert not is_monthly_rate_query("Thời hạn sử dụng thẻ BHYT là bao lâu?")
 
 
+def test_tuition_deadline_expansion_is_not_added_to_bhyt_queries():
+    tuition = process_query("Thời hạn nộp học phí là khi nào?")
+    bhyt = process_query("Hạn đóng bảo hiểm y tế?")
+
+    assert "học phí được gia hạn đến hết ngày" in tuition["bm25_query"]
+    assert "học phí được gia hạn đến hết ngày" not in bhyt["bm25_query"]
+    assert "nộp phí bảo hiểm y tế" in bhyt["bm25_query"]
+
+
 def test_registration_schedule_queries_expand_to_related_schedule_terms():
     from src.retrieval.query_processor import is_registration_schedule_query
 
@@ -631,6 +640,85 @@ def test_payment_deadline_retrieval_excludes_card_validity_table(monkeypatch):
         "payment-deadline"
     ]
     assert "đến hết ngày 15/11/2026" in evidence[0]["text"]
+
+
+def test_payment_deadline_retrieval_matches_explicit_tuition_or_bhyt_topic(monkeypatch):
+    from src.indexing.bm25_index import BM25Index
+    from src.indexing.index_manager import IndexBundle
+    from src.models import ChunkRecord
+    from src.retrieval.hybrid_retriever import HybridRetriever
+
+    chunks = [
+        ChunkRecord(
+            chunk_id="schedule-table",
+            document_id="schedule-document",
+            text="Lớp học phần: toán; thời gian đăng ký: 02/08/2026.",
+            page=1,
+            end_page=1,
+            strategy="fixed_size",
+            metadata={
+                "title_subject": "Thông báo tổ chức học kỳ",
+                "table_id": "schedule:p1:t1",
+                "table_title": "Lịch đăng ký học, tính học phí, thu học phí",
+                "table_headers": ["Lớp học phần", "Thời gian đăng ký"],
+                "table_cells": ["Toán", "02/08/2026"],
+            },
+        ),
+        ChunkRecord(
+            chunk_id="bhyt-deadline",
+            document_id="bhyt-document",
+            text="Hạn nộp phí BHYT đến hết ngày 15/11/2026.",
+            page=1,
+            end_page=1,
+            strategy="fixed_size",
+            metadata={"title_subject": "Thông báo thu phí bảo hiểm y tế"},
+        ),
+        ChunkRecord(
+            chunk_id="tuition-deadline",
+            document_id="tuition-document",
+            text="Thời hạn nộp học phí được gia hạn đến hết ngày 01/11/2026.",
+            page=1,
+            end_page=1,
+            strategy="fixed_size",
+            metadata={
+                "title_subject": "Thông báo gia hạn thời gian nộp học phí",
+                "issue_date": "2026-10-20",
+                "document_relations": [{"relation_type": "extends"}],
+            },
+        ),
+    ]
+
+    class StaticFaiss:
+        def search(self, query_vector, top_k):
+            return [(0, 0.99), (1, 0.9), (2, 0.8)]
+
+    class StaticEmbedder:
+        def __init__(self, model_name):
+            pass
+
+        def encode(self, texts):
+            return [[0.0]]
+
+    monkeypatch.setattr(
+        "src.retrieval.hybrid_retriever.SentenceTransformerEmbedder",
+        StaticEmbedder,
+    )
+    bundle = IndexBundle(
+        strategy="fixed_size",
+        chunks=chunks,
+        bm25=BM25Index(chunks),
+        faiss=StaticFaiss(),
+        model_name="test-model",
+    )
+    retriever = HybridRetriever(bundle)
+
+    tuition = retriever.search("Thời hạn nộp học phí là khi nào?", top_k=1)
+    bhyt = retriever.search("Hạn đóng bảo hiểm y tế?", top_k=1)
+
+    assert [item["chunk"].chunk_id for item in tuition["results"]] == [
+        "tuition-deadline"
+    ]
+    assert bhyt["results"][0]["chunk"].chunk_id == "bhyt-deadline"
 
 
 def test_monthly_rate_retrieval_excludes_annual_card_fee_table(monkeypatch):

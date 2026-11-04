@@ -15,6 +15,7 @@ from src.ingestion.metadata_extractor import (
     extract_metadata,
     extract_pdf_metadata,
     needs_header_ocr,
+    resolve_document_relations,
 )
 from src.ingestion.pdf_loader import read_pdf
 from src.ingestion.validator import validate_pdf
@@ -52,6 +53,38 @@ def _preserve_existing_metadata(
     if previous is None or previous.file_hash != current.file_hash:
         return current
     updates: dict[str, Any] = {}
+    if previous.metadata_verification_status in {"verified", "rejected"}:
+        reviewed_fields = (
+            "document_type",
+            "number_symbol",
+            "number_symbol_raw",
+            "number_symbol_source",
+            "number_symbol_page",
+            "title_subject",
+            "title_subject_raw",
+            "title_subject_corrected",
+            "issue_date",
+            "issue_date_raw",
+            "issue_year",
+            "issue_date_source",
+            "issue_date_page",
+            "issuing_authority",
+            "effective_date",
+            "deadline",
+            "replaces",
+            "amends",
+            "extends",
+            "deadlines",
+            "document_relations",
+            "field_provenance",
+            "metadata_verification_status",
+            "metadata_reviewed_by",
+            "metadata_reviewed_at",
+            "metadata_review_notes",
+        )
+        return current.model_copy(
+            update={field: getattr(previous, field) for field in reviewed_fields}
+        )
     groups = (
         ("number_symbol", "number_symbol_raw", "number_symbol_source", "number_symbol_page"),
         ("issue_date", "issue_date_raw", "issue_year", "issue_date_source", "issue_date_page"),
@@ -82,7 +115,10 @@ def run_ingestion(
 ) -> dict[str, int]:
     source_dir = pdf_dir or settings.pdf_dir
     output_dir = output_dir or settings.processed_dir
-    previous_metadata = _load_existing_metadata(output_dir / "documents.jsonl")
+    previous_metadata_path = output_dir / "documents.jsonl"
+    if not previous_metadata_path.exists():
+        previous_metadata_path = settings.processed_dir / "documents.jsonl"
+    previous_metadata = _load_existing_metadata(previous_metadata_path)
     files = sorted(source_dir.rglob("*.pdf")) if source_dir.exists() else []
     seen_hashes: set[str] = set()
     accepted: list[dict[str, Any]] = []
@@ -90,15 +126,26 @@ def run_ingestion(
     raw_pages: list[dict[str, Any]] = []
     clean_page_records: list[dict[str, Any]] = []
     registry: list[dict[str, Any]] = []
+    extracted_pages: list[PageRecord] = []
     data_root = source_dir
 
     for path in files:
-        valid, reason = validate_pdf(path, data_root, seen_hashes)
+        valid, reason = validate_pdf(
+            path, data_root, seen_hashes, inspect_content=False
+        )
         if not valid:
             rejected.append({"file": str(path), "reason": reason or "Không hợp lệ"})
             continue
         try:
             document_id, file_hash, pages = read_pdf(path, data_root)
+            valid, reason = validate_pdf(
+                path, data_root, seen_hashes, pages=pages
+            )
+            if not valid:
+                rejected.append(
+                    {"file": str(path), "reason": reason or "Không hợp lệ"}
+                )
+                continue
             before, after = clean_pages(pages)
             ocr_needed = needs_header_ocr(pages)
             ocr_started = perf_counter()
@@ -116,6 +163,7 @@ def run_ingestion(
             registry.append(metadata.model_dump(mode="json"))
             raw_pages.extend(page.model_dump(mode="json") for page in pages)
             clean_page_records.extend(page.model_dump(mode="json") for page in after)
+            extracted_pages.extend(pages)
         except (OSError, ValueError) as exc:
             rejected.append({"file": str(path), "reason": str(exc)})
             LOGGER.exception("Không thể xử lý %s", path)
@@ -143,6 +191,7 @@ def run_ingestion(
                     })
                     continue
                 seen_hashes.add(file_hash)
+                extracted_pages.append(page)
                 before, after = clean_pages([page])
                 metadata = extract_metadata(
                     path, web_data_root, document_id, file_hash, before, source_url=source_url
@@ -158,6 +207,13 @@ def run_ingestion(
                 rejected.append({"file": str(path), "reason": str(exc)})
                 LOGGER.exception("Không thể xử lý %s", path)
 
+    linked_metadata = resolve_document_relations(
+        [
+            DocumentMetadata.model_validate(item)
+            for item in registry
+        ]
+    )
+    registry = [item.model_dump(mode="json") for item in linked_metadata]
     _write_jsonl(output_dir / "pages_raw.jsonl", raw_pages)
     _write_jsonl(output_dir / "pages_clean.jsonl", clean_page_records)
     _write_jsonl(output_dir / "documents.jsonl", registry)
@@ -169,6 +225,27 @@ def run_ingestion(
         "rejected_documents": len(rejected),
         "pages": len(clean_page_records),
         "text_pages": sum(bool(item["text"].strip()) for item in clean_page_records),
+        "native_text_pages": sum(
+            page.page_classification == "native_text" for page in extracted_pages
+        ),
+        "hybrid_pages": sum(
+            page.page_classification == "hybrid" for page in extracted_pages
+        ),
+        "ocr_completed_pages": sum(
+            page.ocr_quality is not None
+            and page.ocr_quality.status == "completed"
+            for page in extracted_pages
+        ),
+        "ocr_needs_review_pages": sum(
+            page.ocr_quality is not None
+            and page.ocr_quality.status == "needs_review"
+            for page in extracted_pages
+        ),
+        "ocr_failed_or_unreadable_pages": sum(
+            page.ocr_quality is not None
+            and page.ocr_quality.status in {"failed", "unreadable"}
+            for page in extracted_pages
+        ),
     }
     (output_dir / "ingestion_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"

@@ -35,6 +35,13 @@ _REGISTRATION_SCHEDULE_EXPANSIONS = (
     "hủy học phần",
     "đăng ký học vượt",
 )
+_TUITION_DEADLINE_EXPANSIONS = (
+    "thời hạn nộp học phí",
+    "hạn đóng học phí",
+    "gia hạn thời gian nộp học phí",
+    "học phí được gia hạn đến hết ngày",
+    "thời gian thu học phí",
+)
 
 
 def is_registration_schedule_query(query: str | None) -> bool:
@@ -82,6 +89,8 @@ def _expanded_query(query: str) -> str:
     ]
     if is_registration_schedule_query(normalized):
         expansions.extend(_REGISTRATION_SCHEDULE_EXPANSIONS)
+    if is_tuition_deadline_query(normalized):
+        expansions.extend(_TUITION_DEADLINE_EXPANSIONS)
     return " ".join(dict.fromkeys([normalized, *expansions]))
 
 
@@ -97,6 +106,26 @@ def is_payment_deadline_query(query: str | None) -> bool:
         phrase in query_text for phrase in ("đóng", "nộp", "thu phí", "thanh toán")
     )
     return asks_when and asks_payment
+
+
+def is_tuition_deadline_query(query: str | None) -> bool:
+    if not query:
+        return False
+    query_text = " ".join(query.casefold().split())
+    return any(
+        phrase in query_text
+        for phrase in ("học phí", "hoc phi", "tiền học", "tien hoc")
+    )
+
+
+def is_health_insurance_payment_query(query: str | None) -> bool:
+    if not query:
+        return False
+    query_text = " ".join(query.casefold().split())
+    return any(
+        phrase in query_text
+        for phrase in ("bảo hiểm y tế", "bao hiem y te", "bhyt")
+    )
 
 
 def is_monthly_rate_query(query: str | None) -> bool:

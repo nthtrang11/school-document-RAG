@@ -228,6 +228,18 @@ def test_upload_restores_active_directories_when_completion_record_fails(
             json.dumps({"document_id": document_id, "page_count": 1}) + "\n",
             encoding="utf-8",
         )
+        (output_dir / "pages_clean.jsonl").write_text(
+            json.dumps(
+                {
+                    "document_id": document_id,
+                    "page_no": 1,
+                    "text": "NEW_CONTENT",
+                    "ocr_quality": None,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
     def fake_build(strategy, output_root, **_kwargs):
         (Path(output_root) / strategy).mkdir(parents=True, exist_ok=True)

@@ -1,9 +1,9 @@
 {
   "strategy": "recursive",
-  "fingerprint": "6b29ec341180a1971493b76f53ee69b9e7fcf0477974d84b92702c07d21a539d",
+  "fingerprint": "654b70952fc2166d254672eca20225c0b5ecedb97a89bb8ca191e912e9aea2ba",
   "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
   "chunk_size": 900,
   "chunk_overlap": 120,
-  "chunk_count": 84,
-  "faiss_vectors": 84
+  "chunk_count": 83,
+  "faiss_vectors": 83
 }

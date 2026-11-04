@@ -3,20 +3,33 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
+import unicodedata
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
+from time import perf_counter
+from typing import Any
 
 import numpy as np
 import pymupdf
 from rapidocr import RapidOCR
 
-from src.models import PageRecord, TableCellSpan, TableRowRecord
+from src.config import settings
+from src.models import (
+    OCRQuality,
+    OCRTextRegion,
+    PageRecord,
+    PageTextQuality,
+    TableCellSpan,
+    TableRowRecord,
+)
 
-_OCR_CONFIDENCE_THRESHOLD = 0.9
-_HEADER_HEIGHT_RATIO = 0.3
+LOGGER = logging.getLogger(__name__)
 OCR_LOW_CONFIDENCE_PREFIX = "[[OCR_LOW_CONFIDENCE]] "
 _CELL_SPACES = re.compile(r"[^\S\r\n]+")
+_VALID_PUNCTUATION = frozenset(".,;:!?()[]{}<>/\\-–—_+%#@&*'\"°§$€£")
 
 
 @lru_cache(maxsize=1)
@@ -335,7 +348,407 @@ def _link_continued_tables(pages: list[PageRecord]) -> list[PageRecord]:
     return linked
 
 
-def read_pdf(path: Path, data_root: Path) -> tuple[str, str, list[PageRecord]]:
+def _valid_character_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    valid = sum(
+        character != "\ufffd"
+        and (
+            unicodedata.category(character)[0] != "C"
+            or character in "\n\r\t"
+        )
+        for character in text
+    )
+    return valid / len(text)
+
+
+def evaluate_text_quality(
+    text: str,
+    page: pymupdf.Page,
+    *,
+    ocr_regions: list[OCRTextRegion] | None = None,
+) -> PageTextQuality:
+    if not text.strip():
+        return PageTextQuality(status="empty", reasons=["Trang không có văn bản."])
+
+    text_length = len(text)
+    denominator = max(1, text_length)
+    replacement_ratio = sum(
+        character == "\ufffd"
+        or (
+            unicodedata.category(character).startswith("C")
+            and character not in "\n\r\t"
+        )
+        for character in text
+    ) / denominator
+    garbage_ratio = sum(
+        not (
+            character.isalnum()
+            or character.isspace()
+            or character in _VALID_PUNCTUATION
+        )
+        for character in text
+    ) / denominator
+    words = re.findall(r"[^\W_]+", text, flags=re.UNICODE)
+    visible_characters = sum(not character.isspace() for character in text)
+    word_ratio = sum(len(word) for word in words) / max(1, visible_characters)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    layout_quality = sum(len(line) >= 3 for line in lines) / max(1, len(lines))
+
+    if ocr_regions is not None:
+        boxes = [region.bbox for region in ocr_regions if region.bbox]
+    else:
+        boxes = [
+            tuple(float(value) for value in block["bbox"])
+            for block in page.get_text("dict")["blocks"]
+            if block.get("type") == 0 and block.get("lines")
+        ]
+    page_area = max(1.0, page.rect.width * page.rect.height)
+    text_area = sum(
+        max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
+        for box in boxes
+    )
+    text_coverage = min(1.0, text_area / page_area)
+    image_coverage = _image_area_ratio(page)
+    vn_ratio = _valid_character_ratio(text)
+    coverage_score = min(1.0, text_coverage / 0.08)
+    score = (
+        0.30 * vn_ratio
+        + 0.15 * word_ratio
+        + 0.20 * (1.0 - replacement_ratio)
+        + 0.15 * (1.0 - garbage_ratio)
+        + 0.10 * coverage_score
+        + 0.10 * layout_quality
+    )
+    reasons = []
+    if replacement_ratio > 0:
+        reasons.append("Có ký tự thay thế hoặc ký tự điều khiển.")
+    if text_length < settings.ocr_min_text_characters:
+        reasons.append("Văn bản ngắn hơn ngưỡng ký tự cấu hình.")
+    if score < settings.ocr_min_text_quality_score:
+        reasons.append("Điểm chất lượng tổng hợp thấp hơn ngưỡng cấu hình.")
+    status = (
+        "poor"
+        if score < settings.ocr_min_text_quality_score
+        or text_length < settings.ocr_min_text_characters
+        else "degraded"
+        if score < 0.8 or reasons
+        else "good"
+    )
+    return PageTextQuality(
+        text_length=text_length,
+        vn_ratio=vn_ratio,
+        replacement_ratio=replacement_ratio,
+        garbage_ratio=garbage_ratio,
+        word_ratio=word_ratio,
+        text_coverage=text_coverage,
+        image_coverage=image_coverage,
+        layout_quality=layout_quality,
+        score=max(0.0, min(1.0, score)),
+        status=status,
+        reasons=reasons,
+    )
+
+
+def _image_area_ratio(page: pymupdf.Page) -> float:
+    page_area = page.rect.width * page.rect.height
+    if page_area <= 0:
+        return 0.0
+    image_area = sum(
+        max(0.0, float(image["bbox"][2]) - float(image["bbox"][0]))
+        * max(0.0, float(image["bbox"][3]) - float(image["bbox"][1]))
+        for image in page.get_image_info()
+        if image.get("bbox")
+    )
+    return min(1.0, image_area / page_area)
+
+
+def _ocr_bbox(
+    polygon: Any, page: pymupdf.Page, image_width: int, image_height: int
+) -> tuple[float, float, float, float] | None:
+    try:
+        points = np.asarray(polygon, dtype=float).reshape(-1, 2)
+    except (TypeError, ValueError):
+        return None
+    if len(points) < 2 or not np.isfinite(points).all():
+        return None
+    scale_x = page.rect.width / image_width
+    scale_y = page.rect.height / image_height
+    x0 = max(0.0, float(points[:, 0].min()) * scale_x)
+    y0 = max(0.0, float(points[:, 1].min()) * scale_y)
+    x1 = min(page.rect.width, float(points[:, 0].max()) * scale_x)
+    y1 = min(page.rect.height, float(points[:, 1].max()) * scale_y)
+    if x0 >= x1 or y0 >= y1:
+        return None
+    return (x0, y0, x1, y1)
+
+
+def _ocr_regions(
+    result: Any, page: pymupdf.Page, image_width: int, image_height: int
+) -> list[OCRTextRegion]:
+    texts = getattr(result, "txts", None)
+    if texts is None:
+        return []
+    scores = getattr(result, "scores", None)
+    boxes = getattr(result, "boxes", None)
+    regions = []
+    for index, value in enumerate(texts):
+        text = str(value).strip()
+        if not text:
+            continue
+        confidence = None
+        if scores is not None and index < len(scores):
+            try:
+                score = float(scores[index])
+                if np.isfinite(score) and 0.0 <= score <= 1.0:
+                    confidence = score
+            except (TypeError, ValueError):
+                confidence = None
+        bbox = (
+            _ocr_bbox(boxes[index], page, image_width, image_height)
+            if boxes is not None and index < len(boxes)
+            else None
+        )
+        regions.append(OCRTextRegion(text=text, confidence=confidence, bbox=bbox))
+    return regions
+
+
+def _extract_ocr_page(
+    page: pymupdf.Page,
+    document_id: str,
+    page_no: int,
+    native_text: str,
+    *,
+    render: bool,
+) -> PageRecord:
+    native_quality = evaluate_text_quality(native_text, page)
+    valid_ratio = _valid_character_ratio(native_text)
+    image_area_ratio = _image_area_ratio(page)
+    has_native_text = bool(native_text.strip())
+    if (
+        has_native_text
+        and valid_ratio >= settings.ocr_min_valid_character_ratio
+        and native_quality.score >= settings.ocr_min_text_quality_score
+        and image_area_ratio < settings.ocr_hybrid_image_area_ratio
+    ):
+        return PageRecord(
+            document_id=document_id,
+            page_no=page_no,
+            text=native_text,
+            raw_text=native_text,
+            page_classification="native_text",
+            text_source="text_layer",
+            ocr_quality=OCRQuality(
+                status="not_needed",
+                recognized_character_count=len(native_text),
+                valid_character_ratio=valid_ratio,
+                indexable=True,
+            ),
+            page_quality=native_quality,
+            page_dimensions=(page.rect.width, page.rect.height),
+            page_rotation=page.rotation,
+            processing_version="2",
+            processed_at=datetime.now(timezone.utc),
+        )
+
+    classification = "hybrid" if has_native_text else "ocr_required"
+    if not render:
+        return PageRecord(
+            document_id=document_id,
+            page_no=page_no,
+            text=native_text,
+            raw_text=native_text,
+            page_classification=classification,
+            text_source="text_layer",
+            ocr_quality=OCRQuality(
+                status="not_needed",
+                recognized_character_count=len(native_text),
+                valid_character_ratio=valid_ratio,
+                indexable=has_native_text,
+                reason="Chưa chạy OCR trong bước kiểm tra cấu trúc.",
+            ),
+            page_quality=native_quality,
+            page_dimensions=(page.rect.width, page.rect.height),
+            page_rotation=page.rotation,
+            processing_version="2",
+            processed_at=datetime.now(timezone.utc),
+        )
+
+    ocr_started = perf_counter()
+    try:
+        pixmap = page.get_pixmap(
+            matrix=pymupdf.Matrix(settings.ocr_render_scale, settings.ocr_render_scale),
+            alpha=False,
+        )
+        image = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
+            pixmap.height, pixmap.width, pixmap.n
+        )
+        regions = _ocr_regions(
+            _ocr_engine()(image), page, pixmap.width, pixmap.height
+        )
+        ocr_duration = perf_counter() - ocr_started
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        LOGGER.exception("OCR toàn trang thất bại ở trang %d", page_no)
+        return PageRecord(
+            document_id=document_id,
+            page_no=page_no,
+            text=(
+                native_text
+                if has_native_text
+                and valid_ratio >= settings.ocr_min_valid_character_ratio
+                else ""
+            ),
+            raw_text=native_text or None,
+            page_classification=(
+                "hybrid"
+                if has_native_text
+                and valid_ratio >= settings.ocr_min_valid_character_ratio
+                else "unreadable"
+            ),
+            text_source=(
+                "text_layer"
+                if has_native_text
+                and valid_ratio >= settings.ocr_min_valid_character_ratio
+                else "ocr"
+            ),
+            ocr_quality=OCRQuality(
+                status="failed",
+                reason=str(exc),
+                indexable=(
+                    has_native_text
+                    and valid_ratio >= settings.ocr_min_valid_character_ratio
+                ),
+            ),
+            page_quality=native_quality,
+            page_dimensions=(page.rect.width, page.rect.height),
+            page_rotation=page.rotation,
+            processing_version="2",
+            processed_at=datetime.now(timezone.utc),
+            ocr_engine="RapidOCR",
+            ocr_dpi=round(settings.ocr_render_scale * 72),
+            ocr_duration_seconds=perf_counter() - ocr_started,
+        )
+
+    raw_ocr_text = "\n".join(region.text for region in regions)
+    confidence_values = [
+        region.confidence for region in regions if region.confidence is not None
+    ]
+    confidence = (
+        sum(confidence_values) / len(confidence_values)
+        if confidence_values and len(confidence_values) == len(regions)
+        else None
+    )
+    valid_ocr_ratio = _valid_character_ratio(raw_ocr_text)
+    ocr_text_quality = evaluate_text_quality(
+        raw_ocr_text, page, ocr_regions=regions
+    )
+    reasons = []
+    if len(raw_ocr_text) < settings.ocr_min_text_characters:
+        reasons.append("Không đủ ký tự OCR để đạt ngưỡng cấu hình.")
+    if valid_ocr_ratio < settings.ocr_min_valid_character_ratio:
+        reasons.append("Tỷ lệ ký tự hợp lệ thấp hơn ngưỡng cấu hình.")
+    if confidence is None:
+        reasons.append("OCR engine không cung cấp confidence cho mọi vùng.")
+    elif confidence < settings.ocr_min_confidence:
+        reasons.append("Confidence OCR trung bình thấp hơn ngưỡng cấu hình.")
+    accepted = (
+        bool(regions)
+        and not reasons
+        and ocr_text_quality.score >= settings.ocr_min_text_quality_score
+    )
+    if (
+        bool(regions)
+        and not reasons
+        and ocr_text_quality.score < settings.ocr_min_text_quality_score
+    ):
+        reasons.append("Điểm chất lượng OCR tổng hợp thấp hơn ngưỡng cấu hình.")
+    if not regions:
+        reasons.append("Không nhận diện được vùng văn bản.")
+    use_native_text = (
+        has_native_text
+        and valid_ratio >= settings.ocr_min_valid_character_ratio
+        and native_quality.score >= settings.ocr_min_text_quality_score
+        and (
+            not accepted
+            or native_quality.score >= ocr_text_quality.score
+        )
+    )
+    if not accepted or use_native_text:
+        return PageRecord(
+            document_id=document_id,
+            page_no=page_no,
+            text=(
+                native_text
+                if use_native_text
+                else ""
+            ),
+            raw_text=native_text if use_native_text else raw_ocr_text or None,
+            page_classification=(
+                "hybrid"
+                if has_native_text
+                else "unreadable"
+                if not accepted
+                else "ocr_required"
+            ),
+            text_source=(
+                "text_layer"
+                if use_native_text
+                else "ocr"
+            ),
+            ocr_quality=OCRQuality(
+                status="needs_review" if regions else "unreadable",
+                recognized_character_count=len(raw_ocr_text),
+                valid_character_ratio=valid_ocr_ratio,
+                confidence_score=confidence,
+                region_count=len(regions),
+                reason=" ".join(reasons) or "Text layer được giữ do chất lượng cao hơn OCR.",
+                indexable=use_native_text,
+            ),
+            page_quality=(
+                native_quality if use_native_text else ocr_text_quality
+            ),
+            text_layer_text=native_text if has_native_text else None,
+            ocr_regions=regions,
+            page_dimensions=(page.rect.width, page.rect.height),
+            page_rotation=page.rotation,
+            processing_version="2",
+            processed_at=datetime.now(timezone.utc),
+            ocr_engine="RapidOCR",
+            ocr_dpi=round(settings.ocr_render_scale * 72),
+            ocr_duration_seconds=ocr_duration,
+        )
+
+    return PageRecord(
+        document_id=document_id,
+        page_no=page_no,
+        text=raw_ocr_text,
+        raw_text=raw_ocr_text,
+        page_classification=classification,
+        text_source="hybrid" if has_native_text else "ocr",
+        ocr_quality=OCRQuality(
+            status="completed",
+            recognized_character_count=len(raw_ocr_text),
+            valid_character_ratio=valid_ocr_ratio,
+            confidence_score=confidence,
+            region_count=len(regions),
+            indexable=True,
+        ),
+        page_quality=ocr_text_quality,
+        text_layer_text=native_text if has_native_text else None,
+        ocr_regions=regions,
+        page_dimensions=(page.rect.width, page.rect.height),
+        page_rotation=page.rotation,
+        processing_version="2",
+        processed_at=datetime.now(timezone.utc),
+        ocr_engine="RapidOCR",
+        ocr_dpi=round(settings.ocr_render_scale * 72),
+        ocr_duration_seconds=ocr_duration,
+    )
+
+
+def read_pdf(
+    path: Path, data_root: Path, *, perform_ocr: bool = True
+) -> tuple[str, str, list[PageRecord]]:
     file_hash = sha256_file(path)
     document_id = document_id_for(path, data_root)
     try:
@@ -346,15 +759,23 @@ def read_pdf(path: Path, data_root: Path) -> tuple[str, str, list[PageRecord]]:
     with document:
         if document.is_encrypted:
             raise ValueError("PDF được mã hóa và chưa cung cấp mật khẩu")
-        pages = [
-            PageRecord(
-                document_id=document_id,
-                page_no=number,
-                text=page.get_text("text", sort=True),
-                table_rows=_extract_table_rows(page, document_id, number),
+        pages = []
+        for number, page in enumerate(document, start=1):
+            native_text = page.get_text("text", sort=True)
+            extracted = _extract_ocr_page(
+                page,
+                document_id,
+                number,
+                native_text,
+                render=perform_ocr,
             )
-            for number, page in enumerate(document, start=1)
-        ]
+            pages.append(
+                extracted.model_copy(
+                    update={
+                        "table_rows": _extract_table_rows(page, document_id, number)
+                    }
+                )
+            )
     pages = _link_continued_tables(pages)
     return document_id, file_hash, pages
 
@@ -368,24 +789,47 @@ def read_pdf_header_ocr(
         if page_no < 1 or page_no > len(document):
             raise ValueError(f"Số trang OCR ngoài phạm vi PDF: {page_no}")
         page = document[page_no - 1]
-        clip = pymupdf.Rect(
-            0, 0, page.rect.width, page.rect.height * _HEADER_HEIGHT_RATIO
+        page_dimensions = (page.rect.width, page.rect.height)
+        page_rotation = page.rotation
+        native_text = page.get_text("text").strip()
+        ocr_started = perf_counter()
+        pixmap = page.get_pixmap(
+            matrix=pymupdf.Matrix(settings.ocr_render_scale, settings.ocr_render_scale),
+            alpha=False,
         )
-        pixmap = page.get_pixmap(matrix=pymupdf.Matrix(3, 3), clip=clip, alpha=False)
         image = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
             pixmap.height, pixmap.width, pixmap.n
         )
         result = _ocr_engine()(image)
-        if result is None:
-            text = ""
-        else:
-            text = "\n".join(
-                (
-                    line.strip()
-                    if float(score) >= _OCR_CONFIDENCE_THRESHOLD
-                    else f"{OCR_LOW_CONFIDENCE_PREFIX}{line.strip()}"
-                )
-                for line, score in zip(result.txts, result.scores)
-                if line.strip()
+        regions = _ocr_regions(result, page, pixmap.width, pixmap.height)
+        text = "\n".join(
+            (
+                region.text
+                if region.confidence is not None
+                and region.confidence >= settings.ocr_min_confidence
+                else f"{OCR_LOW_CONFIDENCE_PREFIX}{region.text}"
             )
-    return PageRecord(document_id=document_id, page_no=page_no, text=text)
+            for region in regions
+        )
+        page_quality = evaluate_text_quality(
+            text, page, ocr_regions=regions
+        )
+        ocr_duration = perf_counter() - ocr_started
+    return PageRecord(
+        document_id=document_id,
+        page_no=page_no,
+        text=text,
+        raw_text=text,
+        page_classification="hybrid" if text else "unreadable",
+        text_source="ocr",
+        text_layer_text=native_text or None,
+        page_quality=page_quality,
+        ocr_regions=regions,
+        page_dimensions=page_dimensions,
+        page_rotation=page_rotation,
+        processing_version="2",
+        processed_at=datetime.now(timezone.utc),
+        ocr_engine="RapidOCR",
+        ocr_dpi=round(settings.ocr_render_scale * 72),
+        ocr_duration_seconds=ocr_duration,
+    )

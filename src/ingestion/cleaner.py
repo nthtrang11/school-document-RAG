@@ -18,7 +18,9 @@ def clean_pages(pages: list[PageRecord]) -> tuple[list[PageRecord], list[PageRec
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         lines = [_SPACE_RUN.sub(" ", line).strip() for line in text.split("\n")]
         text = _MANY_NEWLINES.sub("\n\n", "\n".join(lines)).strip()
-        normalized.append(page.model_copy(update={"text": text}))
+        normalized.append(
+            page.model_copy(update={"text": text, "normalized_text": text})
+        )
 
     line_counts = Counter(
         line
@@ -33,7 +35,10 @@ def clean_pages(pages: list[PageRecord]) -> tuple[list[PageRecord], list[PageRec
             update={
                 "text": "\n".join(
                     line for line in page.text.splitlines() if line not in repeated
-                ).strip()
+                ).strip(),
+                "normalized_text": "\n".join(
+                    line for line in page.text.splitlines() if line not in repeated
+                ).strip(),
             }
         )
         for page in normalized

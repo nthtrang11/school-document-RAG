@@ -12,6 +12,10 @@ class FaissIndex:
     def __init__(self, vectors: np.ndarray, index: faiss.Index | None = None):
         if vectors.ndim != 2:
             raise ValueError("Vectors phải có 2 chiều")
+        if vectors.shape[1] < 1:
+            raise ValueError("Embedding phải có ít nhất một chiều")
+        if not np.isfinite(vectors).all():
+            raise ValueError("Embedding chứa giá trị NaN hoặc vô hạn")
         self.dimension = int(vectors.shape[1])
         self.index = index or faiss.IndexFlatIP(self.dimension)
         if index is None and len(vectors):
